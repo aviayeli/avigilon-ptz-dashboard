@@ -1,461 +1,161 @@
-# לוח בקרה - Avigilon PTZ
+# Autonomous Avigilon PTZ Drone-Detection Dashboard
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)](#דרישות-מערכת)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white)](#ארכיטקטורה)
-[![Ultralytics YOLO](https://img.shields.io/badge/YOLO-Ultralytics-purple)](#זיהוי-רחפנים-והפחתת-התרעות-שווא)
-[![OpenCV](https://img.shields.io/badge/OpenCV-4.10-5C3EE8?logo=opencv&logoColor=white)](#ארכיטקטורה)
-[![ONVIF](https://img.shields.io/badge/ONVIF-PTZ-orange)](#ממשק-ה-api)
-[![UI](https://img.shields.io/badge/ממשק-עברית%20(RTL)-lightgrey)](#שימוש-בממשק)
-[![License](https://img.shields.io/badge/רישיון-לא%20הוגדר-red)](#רישיון)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](#getting-started)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white)](#core-architecture)
+[![Ultralytics YOLO](https://img.shields.io/badge/YOLO-Ultralytics-purple)](#the-autonomy-engine)
+[![OpenCV](https://img.shields.io/badge/OpenCV-4.10-5C3EE8?logo=opencv&logoColor=white)](#core-architecture)
+[![ONVIF](https://img.shields.io/badge/ONVIF-PTZ%20primitives-orange)](#hardware--environment-profile)
+[![UI](https://img.shields.io/badge/UI-Hebrew%20RTL%20·%20zero--scroll-lightgrey)](#core-architecture)
 
-> **הערת שקיפות:** מסמך זה נכתב מחדש על בסיס ניתוח מלא של קוד המקור הקיים בפריסה הנוכחית של הפרויקט. כל פרט טכני מבוסס על הקוד בפועל. במקומות שבהם נדרשה הערכה או הנחה (לדוגמה, בהיעדר קובץ רישיון) — הדבר מסומן במפורש.
+An autonomous counter-drone surveillance system built around a single Avigilon H6A PTZ camera. The camera continuously scans an operator-defined zone, investigates motion and detection candidates by actively adjusting its own zoom until it can classify them with confidence, and — when a drone is confirmed — locks on, tracks it with closed-loop visual servoing, and raises a dual (server + browser) alarm. A human operator retains unconditional override authority at all times.
 
-## תוכן עניינים
+The entire autonomy stack is custom-built and vendor-neutral: the camera is driven exclusively through primitive ONVIF commands, with no reliance on vendor tours, presets, or built-in analytics.
 
-- [תקציר](#תקציר)
-- [יכולות עיקריות](#יכולות-עיקריות)
-- [ארכיטקטורה](#ארכיטקטורה)
-- [מבנה הפרויקט](#מבנה-הפרויקט)
-- [דרישות מערכת](#דרישות-מערכת)
-- [התקנה](#התקנה)
-- [הגדרות (Configuration)](#הגדרות-configuration)
-- [הרצת המערכת](#הרצת-המערכת)
-- [שימוש בממשק](#שימוש-בממשק)
-- [מצבי המערכת האוטונומית](#מצבי-המערכת-האוטונומית)
-- [זיהוי רחפנים והפחתת התרעות שווא](#זיהוי-רחפנים-והפחתת-התרעות-שווא)
-- [ממשק ה-API](#ממשק-ה-api)
-- [אבטחה](#אבטחה)
-- [ביצועים](#ביצועים)
-- [לוגים ותיעוד פעילות](#לוגים-ותיעוד-פעילות)
-- [פתרון בעיות נפוצות](#פתרון-בעיות-נפוצות)
-- [שאלות נפוצות](#שאלות-נפוצות)
-- [מגבלות ידועות](#מגבלות-ידועות)
-- [מפת דרכים](#מפת-דרכים)
-- [תרומה לפרויקט](#תרומה-לפרויקט)
-- [רישיון](#רישיון)
+> **Transparency note:** this document describes only what the code actually does. Where behavior is heuristic or approximate (distance estimation, zoom restoration, single-class model limits), that is stated explicitly.
 
-## תקציר
+---
 
-**לוח בקרה - Avigilon PTZ** הוא יישום Web לשליטה מרחוק במצלמת רבע-מנוע (Pan-Tilt-Zoom) מדגם Avigilon H6A, המחוברת דרך NVR של Avigilon ונגישה באמצעות פרוטוקול ONVIF.
+## Table of Contents
 
-הפרויקט התחיל כממשק שליטה ידני פשוט, והתפתח לכדי **מערכת אוטונומית לזיהוי, סיווג ומעקב אחר רחפנים**: המצלמה סורקת אזור מוגדר מראש, מזהה תנועה ועצמים בעזרת מודל ראייה ממוחשבת ייעודי, מאמתת ממצאים מול מודל כללי כדי לצמצם התרעות שווא, ובמקרה של זיהוי רחפן מהימן - משמיעה התרעה קולית (הן בדפדפן והן בשרת) ועוברת למעקב פעיל אחר היעד.
+- [Core Architecture](#core-architecture)
+- [The Autonomy Engine](#the-autonomy-engine)
+- [Key Features](#key-features)
+- [Hardware & Environment Profile](#hardware--environment-profile)
+- [Getting Started](#getting-started)
+- [Operations & Tuning](#operations--tuning)
+- [Testing](#testing)
+- [Roadmap](#roadmap)
+- [Known Limitations](#known-limitations)
+- [License](#license)
 
-הממשק כולו בעברית, בפריסת RTL מלאה, ומיועד להפעלה על ידי מפעיל יחיד מול מצלמה פיזית אחת, בפריסה על **רשת מבודדת/מהימנה** - הלוח פתוח לחלוטין וללא הזדהות (ראו [אבטחה](#אבטחה)).
+---
 
-## יכולות עיקריות
+## Core Architecture
 
-| יכולת | תיאור |
-|---|---|
-| בקרת PTZ ידנית | פאן, טילט, זום, פוקוס, צמצם, מגב ותאורת IR - שליטה ישירה דרך ONVIF |
-| סריקה אוטונומית | סריקת רסטר (Raster Scan) בין נקודות פאן/טילט הניתנות להגדרה, במהירות משתנה |
-| סריקה חכמה | תעדוף אזורים שבהם זוהתה תנועה לאחרונה ("חום"), האטה סביב פעילות והאצה כשאין פעילות |
-| זיהוי תנועה | ניתוח הפרשי מסגרות (Frame Differencing) קל-משקל, פועל ברציפות ובאופן עצמאי מהסריקה - מושהה אוטומטית בזמן שהמצלמה עצמה בתנועה (ראו [ביצועים](#ביצועים)) |
-| זיהוי וסיווג רחפנים | מודל YOLO ייעודי (`best_merged.pt`) עם מחלקה יחידה - "רחפן" |
-| אימות משני | הצלבה מול מודל YOLOv8n כללי (80 מחלקות COCO) לצמצום זיהויי שווא על עצמים נייחים |
-| מעקב אוטומטי | בקרת פרופורציה (Proportional Control) עם אזור מת (Deadband) לייצוב התנועה |
-| התרעה כפולה | צליל התרעה הן בדפדפן (Web Audio API) והן בשרת עצמו (WAV) |
-| יומן אירועים | תיעוד היסטורי של תחילת/סיום סריקה, זיהויי רחפן ואיבוד יעד, כולל צילום מסך אוטומטי |
-| מדדי ביצועים | קצב פריימים (FPS) וזמן היסק (Inference) מוצגים בזמן אמת |
-| רגישות מתכווננת | סף הביטחון לאישור זיהוי רחפן ניתן לכיוונון חי מהממשק |
-| ממשק בעברית מלאה | RTL מקיף, למעט בקרות מרחביות (פאד כיווני, טווחי מספרים) שנשארות LTR במתכוון |
+**Backend** — FastAPI (Python). OpenCV/FFmpeg ingests the camera's RTSP stream (forced over TCP for firewall/NAT resilience); `onvif-zeep` issues PTZ commands; Ultralytics YOLO performs detection. A custom single-class drone model (`best_merged.pt`) is cross-checked against a general 80-class COCO model (`yolov8n.pt`) that geometrically vetoes (IoU overlap) drone candidates confidently classified as ordinary stationary objects — cutting false alarms from chairs, plants, and furniture.
 
-## ארכיטקטורה
+**Frontend** — deliberately build-free vanilla HTML/CSS/JS (Hebrew, full RTL), served directly by FastAPI. The dashboard is a **viewport-locked, zero-scroll application shell**: a `100vh` CSS grid (topbar / main / PTZ bar) in which the event log's list is the only scrollable region. Every control, the live feed, and the alarm state are permanently visible on one screen.
 
-**Backend:** שרת FastAPI (Python), עם OpenCV לעיבוד שידור וידאו (RTSP דרך FFmpeg), ‏`onvif-zeep` לפקודות PTZ בפרוטוקול ONVIF, ו-Ultralytics YOLO לזיהוי אובייקטים.
+### The decoupled inference pipeline
 
-**Frontend:** HTML5, CSS ו-JavaScript וניל טהור - **ללא שלב build**, מוגש ישירות על ידי FastAPI כקבצים סטטיים.
-
-**זרימת נתונים כללית:**
+The load-bearing architectural decision on this hardware:
 
 ```mermaid
-flowchart TB
-    Browser["דפדפן (ממשק עברית RTL)"]
-
-    subgraph FastAPI["שרת FastAPI (ללא אימות/הזדהות)"]
-        direction TB
-        PTZRouter["ptz - בקרה ידנית"]
-        AutonomyRouter["autonomy - סריקה אוטונומית"]
-        DetectionRouter["detection - סטטוס זיהוי ורגישות"]
-        EventsRouter["events - יומן אירועים"]
-        StreamRouter["stream - שידור MJPEG"]
-
-        VideoMgr["VideoStreamManager\n(thread ייעודי ללכידת פריימים)"]
-        DetectionLoop["_detection_loop\n(thread ייעודי להיסק YOLO)"]
-        Autonomy["AutonomyController\n(מכונת מצבים)"]
-        Detector["DroneDetector\n(מודל ייעודי)"]
-        GeneralDetector["מודל YOLOv8n כללי\n(אימות משני)"]
-        Alarm["alarm.py\n(התרעת שרת, Windows בלבד)"]
-        EventLog["EventLog\n(זיכרון + תמונות)"]
-        Onvif["OnvifClient"]
-    end
-
-    Camera[("מצלמת Avigilon H6A\nדרך NVR - ONVIF ‎+‎ RTSP")]
-
-    Browser -- "HTTP/JSON, MJPEG" --> FastAPI
-    StreamRouter --> VideoMgr
-    VideoMgr -- "RTSP (TCP)" --> Camera
-    VideoMgr -- "פריים + seq + timestamp" --> DetectionLoop
-    DetectionLoop --> Detector
-    DetectionLoop --> GeneralDetector
-    Detector -.->|"בדיקת חפיפה (IoU)"| GeneralDetector
-    AutonomyRouter --> Autonomy
-    Autonomy --> Onvif
-    Autonomy --> EventLog
-    Autonomy --> Alarm
-    Autonomy -- "קורא DetectionResult משותף" --> DetectionLoop
-    PTZRouter -- "עצירת סריקה + פקודה ידנית" --> Autonomy
-    PTZRouter --> Onvif
-    Onvif -- "SOAP/ONVIF" --> Camera
-    DetectionRouter --> VideoMgr
-    EventsRouter --> EventLog
+flowchart LR
+    Camera[("Avigilon H6A\nRTSP over TCP")] --> Capture["Capture thread\n(never blocks)"]
+    Capture -- "clean frame + seq + timestamp" --> Detect["Detection thread\nYOLO ~1 Hz"]
+    Detect -- "DetectionResult\n(freshness contract)" --> Autonomy["AutonomyController\n20 Hz state machine"]
+    Detect -- shared result --> MJPEG["MJPEG encoder\n(boxes drawn on copies)"]
+    Autonomy -- "ONVIF primitives" --> Camera
 ```
 
-**עקרונות מפתח בעיצוב:**
+- **YOLO inference runs on a dedicated thread, never in the capture path.** A 200–300 ms inference call inside the capture loop would back frames up in the RTSP buffer, so live-view latency would grow *exactly when a threat appears*. The detection thread always consumes the newest frame and simply skips frames it cannot keep up with.
+- **Every detection result is stamped with the frame's sequence number and capture timestamp** (`DetectionResult`). This freshness contract lets the 20 Hz control loop distinguish evidence captured *after* its last camera adjustment from stale, pre-move results — the foundation of reliable investigation and tracking at a ~1 Hz measurement rate.
+- **Stored frames are always clean.** Detection overlays are drawn on copies at MJPEG-encode and snapshot time, so archived event imagery and any future consumer receive unmodified pixel data.
+- **Camera-motion-aware motion detection.** Frame-differencing is meaningless while a PTZ camera pans (every pixel changes), so the ONVIF client tracks the camera's own motion state from its commands and status polls, and motion detection is suppressed during moves plus a short mechanical-settle window — making "motion" a trustworthy investigation trigger instead of scan-induced noise.
 
-- **זיהוי על thread ייעודי, לא כפול** - הזיהוי (YOLO) רץ ב-`VideoStreamManager._detection_loop`, בתהליכון נפרד מלכידת הווידאו, כך שקריאת היסק (כ-200-300 מילישניות) לעולם לא חוסמת את לכידת הפריימים. התוצאה (`DetectionResult`) נושאת את מספר הרצף וזמן הצילום של הפריים שממנו חושבה, ומתפרסמת כמשאב משותף - גם צופי השידור וגם `AutonomyController` קוראים את אותה תוצאה במקום להריץ היסק כפול. הפריים המאוחסן תמיד "נקי"; תיבות הזיהוי מצוירות על עותקים בזמן הגשת ה-MJPEG/צילום המסך בלבד.
-- **בטיחות פיזית** - לולאת הבקרה האוטונומית עטופה כולה ב-`try/except` שמבטיח עצירת מצלמה בכל מקרה של שגיאה, ול-FastAPI מוגדר `shutdown handler` שעוצר את המצלמה גם אם השרת מופעל מחדש (`--reload`) תוך כדי תנועה.
-- **עדיפות למפעיל (Operator Priority)** - נקודות הקצה לבקרה ידנית (`/api/ptz/move`, `/stop`, `/home`, `/center`) אינן נחסמות יותר בזמן סריקה אוטונומית: פקודה ידנית **עוצרת** את הסריקה האוטונומית ומבצעת את הפעולה - המפעיל תמיד מנצח, במקום לקבל שגיאת 409.
-- **ללא שרת מיקום מוחלט מובנה** - למצלמה יש תמיכה מלאה ב-`GetStatus`/`AbsoluteMove` של ONVIF (אומת מול החומרה בפועל), ולכן הסריקה נעה בין נקודות פאן/טילט מוחלטות, ולא בהערכת זמן/מהירות בלבד.
+## The Autonomy Engine
 
-## מבנה הפרויקט
-
-```text
-avigilon-ptz-dashboard/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # אתחול FastAPI, ניתובי דפים, shutdown handler
-│   │   ├── config.py             # הגדרות סביבה (pydantic-settings, .env)
-│   │   ├── onvif_client.py       # עטיפת onvif-zeep - PTZ, מיקום, מגבלות מכניות, מעקב תנועת-מצלמה
-│   │   ├── video_stream.py       # לכידת RTSP, thread זיהוי ייעודי, זיהוי תנועה, MJPEG, מדדי ביצועים
-│   │   ├── detection.py          # מודלי YOLO, אומדן מרחק, סינון זיהויי שווא
-│   │   ├── autonomy.py           # מכונת המצבים של הסריקה/המעקב האוטונומיים
-│   │   ├── alarm.py               # התרעה קולית בצד השרת (Windows בלבד, no-op בשאר המערכות)
-│   │   ├── events.py             # יומן אירועים וצילומי מסך
-│   │   └── routers/
-│   │       ├── ptz.py            # בקרת PTZ ידנית (עוצרת סריקה אוטונומית אם פעילה)
-│   │       ├── stream.py         # שידור MJPEG
-│   │       ├── system.py         # סטטוס חיבור NVR/ONVIF
-│   │       ├── autonomy.py       # התחלה/עצירה/סטטוס/מגבלות סריקה, השתקת התרעה
-│   │       ├── detection.py      # סטטוס זיהוי, ביצועים, רגישות
-│   │       └── events.py         # יומן אירועים וצילומי מסך
-│   ├── best_merged.pt            # מודל YOLO ייעודי לזיהוי רחפנים (מחלקה יחידה)
-│   ├── snapshots/                # צילומי מסך שנשמרים אוטומטית באירועי זיהוי
-│   ├── requirements.txt
-│   └── .env.example
-└── frontend/
-    ├── index.html                 # לוח הבקרה, מסך יחיד ללא גלילת עמוד (עברית, RTL)
-    └── static/
-        ├── css/
-        │   ├── theme.css          # משתני עיצוב (צבעים, מרווחים, מעברים)
-        │   └── style.css          # כל שאר העיצוב, כולל נעילת viewport
-        └── js/
-            ├── app.js             # סטטוס חיבור ל-NVR
-            ├── video-stream.js    # שידור MJPEG עם התחברות-מחדש אוטומטית
-            ├── ptz-controls.js    # בקרות לחיצה-והחזקה (Pointer Capture)
-            ├── autonomy.js        # התחלה/עצירה של סריקה, טווחים, התרעה קולית, השתקת התרעה
-            ├── detection-status.js# תגיות תנועה/רחפן, מדדי ביצועים
-            └── events.js          # יומן אירועים, מחוון רגישות
-```
-
-### הרכב הקוד (לפי שורות, נספר בפועל בעת כתיבת מסמך זה)
-
-```mermaid
-pie showData
-    title הרכב בסיס הקוד לפי שפה (שורות)
-    "Python (Backend)" : 2006
-    "CSS" : 813
-    "JavaScript" : 568
-    "HTML" : 163
-```
-
-## דרישות מערכת
-
-- **Python 3.10 ומעלה** (הפיתוח והבדיקות בוצעו מול Python 3.12)
-- **Git** (לניהול הקוד)
-- **גישת רשת** למצלמת ה-NVR של Avigilon (RTSP + ONVIF)
-- **מעבד** - הרצת מודלי YOLO נתמכת גם על CPU בלבד (ללא GPU), אך ביצועי ה-Inference תלויים בחומרה.
-- **מערכת הפעלה** - הפרויקט פותח ונבדק בפועל על Windows, אך ה-Backend רץ כיום על כל מערכת הפעלה: `winsound` (מודול סטנדרטי של Windows בלבד) מיובא באופן עצל (Lazy Import) ורק על Windows בפועל (`backend/app/alarm.py`). על מערכות הפעלה אחרות (Linux/macOS) התרעת הקול בצד השרת מתדרדרת בעדינות ל-no-op (עם הודעת קונסולה חד-פעמית), בעוד שההתרעה הקולית בצד הדפדפן (Web Audio API) ממשיכה להישמע כרגיל.
-
-### חומרת הבדיקה בפועל
-
-הפרויקט פותח ונבדק בפועל על מחשב עם המפרט הבא (ללא GPU ייעודי):
-
-| רכיב | פרט |
-|---|---|
-| מעבד | Intel(R) Pentium(R) Gold G5400 CPU @ 3.70GHz (2 ליבות פיזיות / 4 חוטים) |
-| כרטיס מסך | Intel(R) UHD Graphics 610 (מובנה, ללא GPU נפרד) |
-| אחסון | כונן SSD (SATA) + כונן HDD נפרד |
-
-**זו נקודת ייחוס אמיתית, לא דרישת מינימום רשמית** - על חומרה חלשה מסוג זה בוצעו אופטימיזציות ספציפיות (ראו [ביצועים](#ביצועים)), כגון הגבלת מספר ה-threads של PyTorch לאחד בלבד כדי לא להשתלט על שני הליבות הפיזיות היחידות באמצע קריאת Inference.
-
-## התקנה
-
-```bash
-# 1. יצירת סביבה וירטואלית
-python -m venv venv
-
-# 2. הפעלת הסביבה הווירטואלית
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# 3. התקנת תלויות בסיס
-pip install -r backend/requirements.txt
-```
-
-> **הערה חשובה - CPU מול GPU:** קובץ ה-`requirements.txt` כולל את `torch`, `torchvision` ו-`ultralytics` הנדרשים לזיהוי הרחפנים. אם מריצים `pip install` ללא ציון מפורש, ניתן לקבל בטעות גרסת CUDA כבדה (מספר GB) גם על מכונה ללא GPU. אם נדרש להתקין אותם בנפרד, יש לציין את מאגר ה-CPU במפורש:
->
-> ```bash
-> pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-> pip install ultralytics
-> ```
-
-```bash
-# 4. הגדרת משתני סביבה
-cp backend/.env.example backend/.env      # macOS/Linux
-copy backend\.env.example backend\.env    # Windows
-```
-
-ולאחר מכן יש לערוך את `backend/.env` (ראו טבלת [הגדרות](#הגדרות-configuration) למטה).
-
-## הגדרות (Configuration)
-
-כל ההגדרות נטענות מקובץ `backend/.env` (מבוסס `pydantic-settings`):
-
-| משתנה | תיאור | ברירת מחדל |
-|---|---|---|
-| `NVR_IP` | כתובת ה-IP של ה-NVR (או של המצלמה עצמה, אם היא חשופה ישירות ברשת) | - |
-| `NVR_PORT` | פורט RTSP לשליפת השידור | `554` |
-| `ONVIF_PORT` | פורט בקרת ONVIF/PTZ | `80` |
-| `NVR_USERNAME` | שם משתמש להתחברות ל-NVR/למצלמה | - |
-| `NVR_PASSWORD` | סיסמה להתחברות ל-NVR/למצלמה | - |
-| `CAMERA_CHANNEL_ID` | מזהה הערוץ (אינדקס 0) של המצלמה ב-NVR | `0` |
-
-> **הערת אבטחה:** אין ללוח הבקרה עצמו כל מנגנון הזדהות (ראו [אבטחה](#אבטחה)) - יש להריץ אותו רק על רשת מבודדת/מהימנה. פרטי ה-`NVR_USERNAME`/`NVR_PASSWORD` בקובץ `.env` הם עדיין רגישים (משמשים גם ל-RTSP וגם ל-ONVIF מול המצלמה בפועל). קובץ ה-`.env` אינו אמור להיכלל בבקרת גרסה.
-
-### מגבלות מיכניות של המצלמה
-
-`OnvifClient.get_pan_tilt_limits()` שולף מהמצלמה עצמה (דרך `PTZConfiguration.PanTiltLimits`) את טווח הפאן/טילט המכני האמיתי הנתמך, ומשתמש בו כדי להגביל כל בקשת טווח סריקה שמגיעה מהממשק - כך שלא ניתן לבקש מהמצלמה לנוע מעבר לטווח הפיזי שלה גם אם המשתמש הזין ערכים גדולים יותר.
-
-## הרצת המערכת
-
-מתוך תיקיית `backend/`:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-או לחלופין:
-
-```bash
-python -m app.main
-```
-
-לוח הבקרה יהיה זמין מייד בכתובת `http://localhost:8000` - ללא מסך התחברות; דף הבית מוגש ישירות.
-
-## שימוש בממשק
-
-הממשק בנוי כמסך יחיד נעול (Viewport-Locked): אין גלילת עמוד כלל, ואזור הגלילה הפנימי היחיד הוא רשימת יומן האירועים.
-
-1. **בקרה ידנית** - פאד כיווני, זום, פוקוס וצמצם בתחתית המסך. הלחיצה-והחזקה (press-and-hold) מפעילה תנועה רציפה עד לשחרור העכבר/האצבע, תוך שימוש ב-Pointer Capture כדי שהתנועה לא תיפסק בטעות אם הסמן חורג מגבולות הכפתור. בקרות ה-PTZ נשארות פעילות תמיד, גם בזמן סריקה אוטונומית - רמז בממשק ("שליטה ידנית עוצרת את הסריקה האוטונומית") מבהיר שקלט ידני יעצור את הסריקה במקום להיחסם.
-2. **הגדרת טווח סריקה** - שדות "פאן" ו"הטיה" בלוח הצד מוצגים בסולם ידידותי של ‎-100‎ עד ‎100‎ (ולא בסולם ה-ONVIF הגולמי של ‎-1‎ עד ‎1‎), וממולאים מראש בטווח המכני האמיתי של המצלמה. פאנל "מידע על טווח זיהוי" מוצג כ-popover צף (מכפתור ה-&#8505;), לא כחלק קבוע מהעמוד.
-3. **התחלת סריקה** - הכפתור "התחל סריקה" מפעיל את המצלמה האוטונומית: היא סורקת את הטווח שהוגדר, מזהה תנועה ועצמים, חוקרת ממצאים (כולל זום פנימה או החוצה במידת הצורך), ועוברת למעקב אם זוהה רחפן בביטחון מספק. אם רחפן כבר נמצא בשדה הראייה ברגע הלחיצה, המערכת עוברת ישר למעקב והתרעה.
-4. **רגישות זיהוי** - מחוון "רגישות זיהוי רחפן" קובע את סף הביטחון המינימלי הנדרש כדי לאשר זיהוי רחפן ולעבור למעקב.
-5. **יומן אירועים** - פאנל קבוע וגלוי תמיד (לא מתקפל) המציג את היסטוריית האירועים האחרונה (התחלת/סיום סריקה, זיהוי רחפן, איבוד יעד), כולל תמונה ממוזערת לאירועי זיהוי; רשימת האירועים היא אזור הגלילה הפנימי היחיד בעמוד.
-6. **התרעה** - בעת זיהוי רחפן מוצג באנר התרעה עם כפתור "השתק התרעה", שמשתיק את הצליל בלי לשנות את מצב המעקב עצמו (ההתרעה תופעל שוב עם זיהוי מאומת הבא).
-7. **בקרות עזר** - כפתורי הפעלה/כיבוי מגב ותאורת IR ממוקמים בשורת בקרות ה-PTZ התחתונה.
-
-## מצבי המערכת האוטונומית
-
-`AutonomyController` מיושם כמכונת מצבים (State Machine) הרצה בתהליכון (thread) נפרד, המופעל ומופסק על פי דרישה (בניגוד לתהליכון לכידת הווידאו, שרץ תמידית):
+A custom state machine (`backend/app/autonomy.py`) running at 20 Hz on its own thread:
 
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> SEARCHING: התחל סריקה
-    IDLE --> TRACKING: התחל סריקה, ורחפן כבר בשדה הראייה (מעורבות מיידית)
-    SEARCHING --> INVESTIGATING: זוהה עצם (ביטחון >= 15%) או תנועה
-    INVESTIGATING --> SEARCHING: לא רחפן / הזיהוי נעלם / תם התקציב
-    INVESTIGATING --> TRACKING: רחפן אושר (מעל סף רגישות)
-    TRACKING --> SEARCHING: היעד אבד (מעל 3 שניות)
-    SEARCHING --> IDLE: עצור סריקה
-    INVESTIGATING --> IDLE: עצור סריקה
-    TRACKING --> IDLE: עצור סריקה
-    IDLE --> [*]
-
-    note right of SEARCHING
-        סריקת רסטר בין נקודות פאן/טילט,
-        עצירה של כ-1.2 שניות בכל נקודה
-        (מבט יציב לזיהוי תנועה/עצם),
-        תעדוף אזורי "חום" (תנועה אחרונה)
-        ומהירות משתנה
-    end note
-
-    note right of INVESTIGATING
-        לולאת זום לא-חוסמת (עד 4 פולסים):
-        זום פנימה לעוד פיקסלים או החוצה
-        להקשר (תיבה מעל 35% מהפריים),
-        מסתמכת רק על תוצאות זיהוי
-        שחושבו מפריימים שצולמו אחרי
-        שהמצלמה נחה; טריגר תנועה בלבד
-        מחזיק מבט יציב עד 2.5 שניות
-    end note
-
-    note right of TRACKING
-        בקרת פרופורציה עם אזור מת,
-        תיקון פעם אחת לכל תוצאת זיהוי
-        חדשה (מוגבל בזמן, ~0.45 שניות),
-        החזקת נעילה עם היסטרזיס (60%
-        מסף האישור), התרעה כפולה פעילה
-    end note
+    IDLE --> SEARCHING: start scan
+    IDLE --> TRACKING: start scan with drone already in view (immediate engage)
+    SEARCHING --> INVESTIGATING: candidate ≥15% confidence, or motion
+    INVESTIGATING --> SEARCHING: not a drone / vanished / budget exhausted
+    INVESTIGATING --> TRACKING: confirmed above operator threshold
+    TRACKING --> SEARCHING: target lost (3 s) — zoom restored
+    SEARCHING --> IDLE: stop
+    INVESTIGATING --> IDLE: stop
+    TRACKING --> IDLE: stop
 ```
 
-בעת עצירה/איבוד יעד, זום נטו שהופעל אוטונומית (בחקירה או במעקב) מבוטל לפני חזרה לסריקה, כדי לשחזר בקירוב את המסגור המקורי של המפעיל.
+**SEARCHING — boustrophedon scanning with heat prioritization.** The operator's pan/tilt zone is covered by a zigzag waypoint raster driven by ONVIF `AbsoluteMove` with closed-loop arrival detection (status polling + timeout fallback). The scan **dwells ~1.2 s at each waypoint** so both the motion detector and the ~1 Hz detector get a stationary, blur-free look at every sector. Waypoints near recent activity accumulate decaying "heat" and are revisited out of order and swept slowly — bounded so a stubborn false positive can never capture the scan permanently.
 
-## זיהוי רחפנים והפחתת התרעות שווא
+**INVESTIGATING — confidence-seeking zoom loops.** When triggered, the camera stops and actively works to *identify*: zooming **in** for more pixels on small targets, or **out** for context when the box already fills the frame — up to four non-blocking zoom pulses. Each step is evaluated only against detection results computed from frames captured after the adjustment settled. A motion-only trigger holds a stationary stare for up to 2.5 s. Give-up paths undo the net zoom applied, restoring the operator's original framing.
 
-המודל הייעודי (`best_merged.pt`) מאומן על **מחלקה יחידה בלבד - "רחפן"**. המשמעות המעשית: המודל אינו יכול לומר "זה כיסא, לא רחפן" - הוא יכול רק להצביע על "רחפן" בביטחון מסוים, ולכן עלול לזהות בטעות עצמים נייחים כרחפן בביטחון בינוני.
+**TRACKING — "Move-Settle-Measure" visual servoing for low-end hardware.** Proportional control with a deadband centers the target, and bang-bang zoom holds it at a consistent scale. Because measurements arrive at only ~1 Hz on this CPU, corrections are **computed once per fresh detection result and time-boxed (~0.45 s): move a little, stop, re-measure** — rather than letting a command derived from a second-old bounding box run continuously into overshoot. Confidence hysteresis (lock held at 60% of the confirm threshold) prevents momentary dips from dropping a lock that took an investigation to acquire. On loss, the net zoom autonomy applied is unwound before the scan resumes.
 
-כדי לצמצם את הבעיה, כל מועמד "רחפן" מוצלב אוטומטית מול **מודל YOLOv8n כללי, מאומן מראש על 80 מחלקות COCO**. אם המודל הכללי מזהה באותו אזור (בחפיפה גיאומטרית, לפי IoU) עצם נייח מוכר בביטחון גבוה - כיסא, ספה, שולחן, מזוודה, תיק, עציץ ועוד - הזיהוי נדחה כזיהוי שווא סביר.
+## Key Features
 
-האימות המשני רץ בכל מצב מלבד **TRACKING**: ברגע שרחפן אושר ומעקב פעיל, האימות מנוטרל (`set_drone_verification_enabled(False)`) כדי לחסוך כמחצית מעלות ההיסק בזמן מעקב - הוא חוזר להיות פעיל מיד עם חזרה לחיפוש (SEARCHING).
+| Feature | Detail |
+|---|---|
+| **Unconditional manual override** | Any manual PTZ command *stops* the autonomous scan and executes — the operator always wins, never a "busy" rejection. An on-screen hint communicates the takeover behavior. |
+| **Alarm with operator acknowledge** | Dual alarm (server-side tone on Windows, Web-Audio tone in every browser) with a dismiss control that silences without disturbing an active track; re-arms on the next confirmed detection. |
+| **First-run configuration panel** | NVR/ONVIF connection settings editable from the dashboard (gear icon) with a live connection test — no `.env` hand-editing. Values are written atomically with full quoting/escaping, credentials never round-trip to the browser, and the server boots cleanly with no configuration at all. |
+| **Session telemetry & tuning reports** | Every run auto-writes a timestamped session log (`backend/logs/`); `backend/scripts/summarize_telemetry.py` (stdlib-only) turns it into a tuning report — inference latency distribution, waypoint travel/timeout rates, investigation outcomes, tracking cadence, deadband ratio — with data-driven tuning hints. |
+| **Event log with evidence** | Scan lifecycle, confirmed detections (with annotated snapshot), and target-loss events, permanently visible in the single-screen UI. |
+| **Deliberate no-auth design** | No login, sessions, or accounts — by explicit architectural decision, for deployment on **isolated/trusted networks only**. Every endpoint, including live video and PTZ control, is open to anyone who can reach the server; do not expose it to untrusted networks. |
 
-```mermaid
-sequenceDiagram
-    participant Cam as מצלמה (RTSP)
-    participant VS as VideoStreamManager (thread לכידה)
-    participant DL as _detection_loop (thread זיהוי ייעודי)
-    participant D as מודל ייעודי (רחפן)
-    participant G as מודל כללי (COCO)
-    participant A as AutonomyController
-    participant U as משתמש (דפדפן/שרת)
+## Hardware & Environment Profile
 
-    Cam->>VS: פריים חדש
-    VS-->>DL: seq + timestamp של הפריים (ללא חסימת לכידה)
-    DL->>D: היסק (אחת לשנייה, מתעדף)
-    D-->>DL: מועמדים ("רחפן", ביטחון, תיבה)
-    alt קיימים מועמדי "רחפן" וה-Mode אינו TRACKING
-        DL->>G: היסק על אותו פריים
-        G-->>DL: זיהויים כלליים (80 מחלקות)
-        DL->>DL: בדיקת חפיפה (IoU) מול עצמים נייחים
-        DL->>DL: דחיית מועמדים סותרים
-    end
-    DL-->>A: DetectionResult מאומת (משותף לכולם, עם seq/timestamp)
-    A->>A: תוצאה טרייה? ביטחון >= סף הרגישות?
-    A->>U: התרעה קולית (דפדפן + שרת, Windows) + מעבר למעקב
+Designed for **edge deployment on genuinely constrained hardware** — the reference machine is an Intel Pentium G5400 (2 cores / 4 threads), integrated UHD 610 graphics, **no discrete GPU**:
+
+- PyTorch is pinned to a **single thread**: on a 2-core CPU, multi-threaded inference saturates both physical cores for the duration of every call, starving video capture and the API. One slightly slower inference call that leaves a core free beats a faster one that freezes the UI.
+- Inference is throttled (~1 Hz), doubled only when a drone candidate needs COCO cross-checking — and that verification pass is **skipped during TRACKING**, halving inference cost precisely when sustained load matters.
+- The 20 Hz control loop reads frame *dimensions* through cheap accessors; full ~6 MB frame copies happen only at snapshot time.
+- **No vendor lock-in:** the camera is driven purely through primitive ONVIF operations (`AbsoluteMove`, `ContinuousMove`, `Stop`, `GetStatus`, `SendAuxiliaryCommand` for wiper/IR). Any ONVIF-compliant PTZ camera with absolute positioning support is a candidate target; nothing depends on Avigilon-specific analytics, tours, or SDKs.
+- **Cross-platform backend:** developed for Windows deployment, but runs on any OS — the Windows-only server-side alarm (`winsound`) is lazily imported and degrades to a no-op elsewhere (the browser alarm always sounds).
+
+## Getting Started
+
+```bash
+# 1. Clone and create a virtual environment
+git clone https://github.com/aviayeli/avigilon-ptz-dashboard.git
+cd avigilon-ptz-dashboard
+python -m venv venv
+
+# 2. Activate it
+venv\Scripts\activate          # Windows
+source venv/bin/activate       # Linux / macOS
+
+# 3. Install dependencies (CPU-only torch — avoid the multi-GB CUDA build)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r backend/requirements.txt
+
+# 4. Run (from backend/)
+cd backend
+uvicorn app.main:app
 ```
 
-> **חשוב להבין:** מכיוון של-COCO אין מחלקת "רחפן" או "כלי טיס", המודל הכללי יכול **רק לשלול** זיהוי ("זה נראה כמו כיסא ולא כמו רחפן"), ולעולם לא **לאשר** זיהוי באופן חיובי. זהו כלי עזר הֶאוריסטי לצמצום זיהויי שווא, לא הוכחה מדעית לנוכחות רחפן.
+Open `http://localhost:8000`. On first run, use the **gear icon** in the topbar to enter the NVR address, credentials, and camera channel, test the connection, save — then restart the server to apply. (Alternatively, copy `backend/.env.example` to `backend/.env` and edit by hand.)
 
-### אומדן מרחק - הערכה גסה בלבד
+## Operations & Tuning
 
-כאשר מזוהה רחפן, המערכת מציגה הערכת מרחק גסה (לדוגמה "~12 מ'"), המחושבת לפי גודל התיבה המזוהה בפיקסלים והנחת שדה ראייה אופקי (HFOV) של 60 מעלות ורוחב רחפן ייחוס של 0.35 מטר. **המצלמה אינה מכוילת מרחק ואין בה חיישן טווח (לייזר/רדאר)** - לכן מדובר בסדר גודל בלבד, לא במדידה מדויקת. הסבר זה מוצג גם למשתמש בממשק עצמו (פאנל "מידע על טווח זיהוי").
+- Every server run writes `backend/logs/session-<timestamp>-<pid>.log` with per-line `HH:MM:SS` stamps.
+- `python backend/scripts/summarize_telemetry.py` summarizes the newest session (or pass a path) into a tuning report; its hints only fire on measured thresholds.
+- All behavioral constants (scan speeds, dwell, investigation budget, deadband, correction time-box, settle windows) are named constants at the top of `backend/app/autonomy.py` and `backend/app/video_stream.py`, each documented with its rationale. Tune one at a time against telemetry.
 
-## ממשק ה-API
+## Testing
 
-כל נקודות הקצה פתוחות לחלוטין, ללא כל דרישת אימות/הזדהות (ראו [אבטחה](#אבטחה)).
+```bash
+python backend/tests/test_state_machine.py
+```
 
-| נתיב | Method | תיאור |
-|---|---|---|
-| `/` | GET | הגשת עמוד הלוח הראשי |
-| `/api/system/status` | GET | סטטוס חיבור ל-NVR/ONVIF |
-| `/api/stream/mjpeg` | GET | שידור וידאו חי (multipart MJPEG) |
-| `/api/ptz/move` | POST | תנועה ידנית (פאן/טילט/זום) - אם הסריקה האוטונומית פעילה, **עוצרת אותה** ומבצעת את הפקודה |
-| `/api/ptz/stop` | POST | עצירת תנועה - עוצרת סריקה אוטונומית פעילה (אם יש) |
-| `/api/ptz/home` | POST | חזרה למיקום בית - עוצרת סריקה אוטונומית פעילה (אם יש) |
-| `/api/ptz/center` | POST | שמירת המיקום הנוכחי כמרכז (0,0) - עוצרת סריקה אוטונומית פעילה (אם יש) |
-| `/api/ptz/focus`, `/api/ptz/iris`, `/api/ptz/aux` | POST | פוקוס, צמצם, ופקודות עזר (מגב/IR) |
-| `/api/autonomy/start` | POST | התחלת סריקה אוטונומית (טווח פאן/טילט בסולם ‎-100..100‎); אם רחפן כבר בשדה הראייה - עוברת ישר למעקב + התרעה |
-| `/api/autonomy/stop` | POST | עצירת הסריקה האוטונומית |
-| `/api/autonomy/alarm/dismiss` | POST | השתקת ההתרעה בלי לשנות את המצב (מתאפסת אוטומטית עם זיהוי מאומת הבא) |
-| `/api/autonomy/status` | GET | מצב נוכחי, האם התרעה פעילה, זיהוי אחרון |
-| `/api/autonomy/limits` | GET | טווח הפאן/טילט המכני האמיתי של המצלמה |
-| `/api/detection/status` | GET | סטטוס תנועה, זיהוי רחפן ומדדי ביצועים (FPS, זמן היסק) |
-| `/api/detection/sensitivity` | GET/POST | קריאה/עדכון של סף הביטחון לאישור זיהוי רחפן |
-| `/api/events` | GET | 50 האירועים האחרונים (ניתן לשינוי בפרמטר `limit`) |
-| `/api/events/snapshots/{filename}` | GET | תמונת אירוע - בדיקת תקינות שם קובץ (Regex) בלבד, **ללא אימות** (ראו [אבטחה](#אבטחה)) |
+Runs the **real** autonomy control loop against a fake ONVIF client and controllable detection results, with all heavy dependencies (torch, OpenCV, onvif) stubbed — 24 scenarios covering both investigation triggers, evidence-freshness gating, the zoom loop's give-up path, tracking hysteresis, target loss with zoom restore, immediate engagement, and stop responsiveness. Requires nothing installed beyond Python; runs on any machine in ~25 s.
 
-## אבטחה
+## Roadmap
 
-> **⚠️ אין אימות/הזדהות כלל.** הלוח **נטול לחלוטין** מסך התחברות, סשנים, cookies, או כל מנגנון הרשאות אחר - כל נקודות הקצה, כולל שליטת PTZ ותצוגת השידור החי, פתוחות לכל מי שמגיע לכתובת השרת. **הפרויקט מיועד לפריסה על רשת מבודדת/מהימנה בלבד** (למשל רשת ניהול פנימית ללא גישה מהאינטרנט הפתוח) - אין להריץ אותו כפי שהוא מול רשת ציבורית או לא-מהימנה.
+Prioritized, pending calibration data from physical hardware testing:
 
-- **ללא אימות** - כל הנתיבים (כולל תצוגת שידור וידאו חי, שליטת PTZ, וצילומי מסך של אירועים) נגישים ללא כל הזדהות. גם `/api/events/snapshots/{filename}` - עלול לכלול מידע רגיש על המיקום המצולם - מוגש כעת ללא אימות, עם בדיקת תקינות שם קובץ מחמירה (Regex) שמונעת רק ניצול למעבר בין תיקיות (Path Traversal), לא גישה לא-מורשית.
-- **עדיפות למפעיל (Operator Priority)** - פקודות PTZ ידניות אינן נחסמות יותר בזמן סריקה אוטונומית: כל פקודה ידנית עוצרת את הסריקה האוטונומית ומבצעת את עצמה, כך שהמפעיל תמיד "מנצח" על הבקרה האוטונומית. משתמש שני (או לשונית ישנה שנשארה פתוחה) יכול לעצור סריקה פעילה בכל רגע - זו התנהגות מכוונת של עדיפות מפעיל, לא הגנה מפני ריבוי משתמשים.
-- **החלמה מקריסה** - אם לולאת הבקרה האוטונומית נכשלת מכל סיבה, המערכת מבטיחה עצירת מצלמה ואיפוס מצב ל-IDLE, כדי שלא תישאר "תקועה" במצב פעיל ללא בקרה.
+1. **OpenVINO inference backend** — expected 2–4× YOLO speedup on the Intel edge CPU via Ultralytics' native export.
+2. **ROI-cropped inference during tracking** — raising the effective measurement rate exactly when it matters.
+3. **Alpha-beta target prediction** — velocity-based prediction between the ~1 Hz measurements for faster targets (deliberately chosen over a full Kalman filter until data justifies one).
+4. **Zoom-aware control gains** — scaling correction velocity by zoom level (pending hardware confirmation of zoom position readback).
+5. **Offline one-click Windows deployment** — Inno Setup installer bundling an embeddable Python runtime, all wheels, and both model weights (no internet required on isolated networks), with a launcher that starts the server and opens the dashboard as a chromeless Edge application window.
 
-> **הערה:** קובץ ה-`.env.example` בפרויקט מכיל ערכי דוגמה בלבד. יש לוודא שקובץ `.env` בפועל, עם פרטי הרשת האמיתיים של ה-NVR, **אינו** נכלל בבקרת גרסה ואינו משותף.
+Additional reliability items: target re-acquisition sweep, capture watchdog, persistent event log, automated lens-wiper triggering (in data-collection phase).
 
-## ביצועים
+## Known Limitations
 
-- **זיהוי YOLO על thread ייעודי, נפרד מלכידת הווידאו** - ההיסק (פעם בשנייה כברירת מחדל, `DETECTION_INTERVAL_SECONDS`) רץ ב-`VideoStreamManager._detection_loop`, thread נפרד לגמרי מלכידת הפריימים - כך שקריאת Inference (כ-200-300 מילישניות) לעולם אינה חוסמת את לכידת הפריימים מה-RTSP. התוצאה (`DetectionResult`) נושאת את מספר הרצף וזמן הצילום של הפריים שממנו חושבה, כך שקוד הבקרה (למשל `AutonomyController`) יכול להבחין בין תוצאה טרייה לתוצאה מיושנת.
-- **thread יחיד ל-PyTorch** - `torch.set_num_threads(1)`. במעבד דו-ליבתי (ראו [חומרת הבדיקה בפועל](#חומרת-הבדיקה-בפועל)), שני threads להיסק היו משתלטים על שתי הליבות הפיזיות כולן במהלך כל קריאת Inference (כ-250 מילישניות), ומרעיבים את שרת ה-API. thread יחיד מאט מעט את ההיסק עצמו, אך משאיר ליבה פנויה לשאר המערכת - בממשק חי, זו העדפה נכונה.
-- **ללא העתקות פריים מיותרות** - לולאת הבקרה האוטונומית רצה 20 פעמים בשנייה, אך זקוקה רק לממדי הפריים (רוחב/גובה), לא לתוכן הפיקסלים בפועל. לכן היא משתמשת ב-accessor זול (`get_latest_frame_shape`) במקום להעתיק פריים מלא (כ-6MB) בכל טיק - העתקת הפריים המלאה נשמרת רק לרגע שבו נשמר צילום מסך אמיתי (אירוע זיהוי רחפן). הפריים המאוחסן תמיד נקי (ללא תיבות); תיבות הזיהוי מצוירות על עותקים בעת הגשת ה-MJPEG/צילום המסך בלבד.
-- **ללא Middleware מיותר** - הוסר Middleware ניפוי-באגים זמני שרשם ללוג כל בקשת HTTP; היה מדפיס פעמיים (עם `flush` חוסם) על כל בקשה, כולל מתוך מספר לולאות polling מקבילות בממשק.
-- **אימות COCO מדולג במעקב** - האימות המשני מול המודל הכללי (COCO) רץ בכל מצב מלבד TRACKING, כך שבזמן מעקב אחר יעד מאושר עלות ההיסק לפריים נחתכת בקירוב לחצי.
-- **זיהוי תנועה קל-משקל, מושתק בזמן תנועת המצלמה** - הפרשי מסגרות (Frame Differencing) בגווני אפור רצים על כל פריים, ללא תלות בהיסק ה-YOLO היקר יותר. `OnvifClient` עוקב אחר מצב התנועה של המצלמה עצמה (לפי הפקודות שהוא שולח וסקרי הסטטוס), ו-`video_stream.py` משתיק את סימון התנועה בזמן שהמצלמה בתנועה ועד 0.75 שניות אחרי שנעצרה (זמן התייצבות) - פאן/טילט/זום משנים כל פיקסל בפריים, כך שללא ההשתקה הזו כל תנועת PTZ הייתה נקראת כ"תנועה" שגויה.
-- **שקיפות מדידה** - קצב הפריימים בפועל (FPS) וזמן ההיסק האחרון מוצגים בממשק בזמן אמת, ולא כערך תיאורטי.
-- **מגבלת חומרה ידועה** - זמני היסק בפועל (כ-200-300 מילישניות לפריים במכונת הבדיקה) תלויים לחלוטין בחומרה שעליה מותקנת המערכת.
+- **Distance estimates are rough indications only** — derived from box size with an assumed field of view and reference drone width; there is no rangefinder and no calibration.
+- **Single-class detector** — the drone model can only assert "drone-ness" with some confidence; the COCO cross-check mitigates but cannot eliminate false positives on unusual stationary objects.
+- **Single camera per server instance** — the architecture assumes one physical camera.
+- **Event log is in-memory** — cleared on restart (snapshots persist on disk).
+- **Tracking is measurement-rate-bound** — at ~1 Hz effective cadence, very fast or close targets can outrun the correction cycle (see Roadmap items 1–3).
 
-## לוגים ותיעוד פעילות
+## License
 
-- לוגים טכניים (בקשות HTTP, פעולות סריקה, שגיאות היסק) נכתבים ל-stdout של השרת בפורמט טקסט חופשי (`print`), מיועדים לפיתוח ואבחון ולא למערכת ניטור מרכזית.
-- **יומן אירועים למשתמש** (נפרד מהלוגים הטכניים) - נשמר בזיכרון בלבד (מבנה `deque` בגודל מוגבל, 100 אירועים אחרונים), **ולא נשמר בין הפעלות שרת**. אירוע זיהוי רחפן שומר גם צילום מסך בתיקיית `backend/snapshots/`.
-
-## פתרון בעיות נפוצות
-
-| תסמין | סיבה אפשרית | פתרון |
-|---|---|---|
-| השידור לא עולה / "מתחבר מחדש לשידור..." בלולאה | בעיית תעבורת UDP מול חומת אש/NAT | המערכת כבר מכריחה תעבורת RTSP דרך TCP (`OPENCV_FFMPEG_CAPTURE_OPTIONS`); יש לוודא שאין חסימת רשת בין השרת למצלמה |
-| פקודה ידנית עוצרת סריקה אוטונומית באמצע חקירה/מעקב | זו התנהגות מכוונת ("עדיפות למפעיל") - כל פקודת PTZ ידנית עוצרת אוטומטית את הסריקה האוטונומית ומבצעת את עצמה, במקום להיחסם ב-409 | להתחיל סריקה חדשה מחדש מהממשק אם רוצים לחזור למצב אוטונומי |
-| זיהויי "רחפן" שגויים חוזרים ונשנים | המודל הייעודי בעל מחלקה יחידה, נוטה לזיהויי שווא | לכוונן את מחוון הרגישות כלפי מעלה; להסתמך על האימות המשני (מנוטרל בזמן TRACKING בלבד); לזכור שזו מגבלה ידועה של המודל |
-| התקנת `torch`/`ultralytics` איטית מאוד או מוריד קבצים ענקיים | הותקנה גרסת CUDA במקום CPU | להתקין מפורשות עם `--index-url https://download.pytorch.org/whl/cpu` (ראו [התקנה](#התקנה)) |
-| אין קול התרעה בשרת עצמו | אם השרת רץ על Windows: ייתכן שאין רמקול/פלט שמע פעיל. אם השרת רץ על מערכת הפעלה שאינה Windows: זו התנהגות צפויה - `winsound` זמין רק ב-Windows, ו-`backend/app/alarm.py` מתדרדר בעדינות ל-no-op בשאר המערכות | ב-Windows: ודאו התקן שמע פעיל (`winsound.PlaySound` על קובץ WAV זמני). בכל מקרה - ההתרעה בדפדפן (Web Audio API) ממשיכה להישמע ואינה תלויה בכך |
-
-## שאלות נפוצות
-
-**האם המערכת יכולה למדוד מרחק מדויק לרחפן?**
-לא. הערכת המרחק היא הערכה גסה בלבד, המבוססת על גודל התיבה המזוהה והנחות לגבי שדה הראייה וגודל הרחפן. אין במערכת חיישן טווח ייעודי.
-
-**האם ניתן להריץ את המערכת מול כמה מצלמות בו-זמנית?**
-לא בפריסה הנוכחית. הארכיטקטורה (Singletons כגון `get_video_stream_manager`, `get_onvif_client`, `get_autonomy_controller`) מניחה מצלמה פיזית יחידה לכל הפעלת שרת.
-
-**האם יש שמירה מתמשכת (מסד נתונים) של יומן האירועים?**
-לא. יומן האירועים נשמר בזיכרון בלבד ומתאפס עם הפעלה מחדש של השרת. צילומי המסך עצמם נשארים על הדיסק בתיקיית `snapshots/`.
-
-**האם ניתן להשתמש במודל זיהוי אחר?**
-כן - `backend/app/detection.py` טוען את המודל הייעודי מהקובץ `best_merged.pt` ואת המודל הכללי מ-`yolov8n.pt` (מורד אוטומטית). ניתן להחליף את שני הקבצים במודלים אחרים התואמים לפורמט Ultralytics YOLO.
-
-## מגבלות ידועות
-
-- **ללא כיול מרחק אמיתי** - כל נתוני המרחק/הטווח בממשק הם הערכה בלבד (ראו סעיף [זיהוי רחפנים](#זיהוי-רחפנים-והפחתת-התרעות-שווא)).
-- **מודל בעל מחלקה יחידה** - עלול להניב זיהויי שווא על עצמים נייחים; מנוטרל חלקית על ידי האימות המשני, לא באופן מוחלט.
-- **ללא שמירה מתמשכת** - יומן האירועים אינו נשמר במסד נתונים ומתאפס בהפעלה מחדש.
-- **מצלמה פיזית יחידה** - אין תמיכה מובנית בריבוי מצלמות/NVRs בו-זמנית.
-- **התרעת שרת שקטה על מערכות שאינן Windows** - `winsound` הוא מודול סטנדרטי של Windows בלבד; על Linux/macOS ההתרעה בצד השרת מתדרדרת ל-no-op (עם הודעת קונסולה חד-פעמית) - יש להסתמך על ההתרעה בצד הדפדפן, שממשיכה לפעול בכל מערכת הפעלה, או להוסיף מימוש חלופי ל-`backend/app/alarm.py`.
-- **סריקה חכמה מבוססת חום, לא חיזוי תנועה** - תעדוף האזורים ה"חמים" הוא מנגנון היוריסטי (עלייה/דעיכה של ציון פעילות), ולא מודל חיזוי תנועה מבוסס פיזיקה (כדוגמת מסנן קלמן).
-
-## מפת דרכים
-
-רעיונות להרחבה עתידית שזוהו אך **טרם מומשו** בפריסה הנוכחית:
-
-- אזורי זיהוי (Detection Zones) מוגדרים על גבי תמונת הווידאו
-- מפת חום (Heatmap) מצטברת של אזורי פעילות
-- הקלטת וידאו רציפה, לא רק צילומי מסך נקודתיים
-- גרפים היסטוריים של רמות ביטחון וזיהויים לאורך זמן
-- סטטוס תקינות חיישנים/מנועים (Servo Health)
-- פרופילי התרעה קוליים הניתנים להתאמה אישית
-- מעבר בין מספר תבניות סריקה
-- תמיכה בריבוי מצלמות
-
-## תרומה לפרויקט
-
-הפרויקט אינו כולל כיום קובץ הנחיות תרומה (`CONTRIBUTING.md`) או תהליך Pull Request מוגדר. מפתחים המעוניינים לתרום מוזמנים לפעול לפי העקרונות הבאים, העולים מהמבנה הקיים של הקוד:
-
-- שמירה על הפרדת אחריות בין נתבים (`routers/`) לבין הלוגיקה העסקית (`autonomy.py`, `video_stream.py`, `detection.py`).
-- הימנעות מהוספת שכבת Build לצד הלקוח - הפרונט-אנד נשאר HTML/CSS/JS וניל במתכוון.
-- כל שינוי המשפיע על תנועת PTZ בפועל (פקודות `continuous_move`/`absolute_move`) יש לבדוק מול חומרה אמיתית, בזהירות, מכיוון שמדובר בציוד פיזי הנע בפועל.
-
-## רישיון
-
-**⚠️ הערת שקיפות:** לא נמצא קובץ `LICENSE` בפריסה הנוכחית של המאגר. יש להוסיף קובץ רישיון מפורש (לדוגמה MIT, Apache 2.0, או רישיון קנייני פנים-ארגוני) בהתאם למדיניות הארגון, לפני הפצה או פרסום הפרויקט מחוץ לסביבת הפיתוח הנוכחית.
+**No license file is currently present** — this repository is unlicensed (all rights reserved by default) and not yet cleared for distribution. Note in particular that the Ultralytics YOLO dependency is **AGPL-3.0**: distributing this software to third parties requires either AGPL-compliant source release or an Ultralytics commercial license. Resolve before any external release.
