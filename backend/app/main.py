@@ -1,5 +1,11 @@
 from pathlib import Path
 
+# Must run before anything else prints: wraps stdout/stderr so the whole
+# session (telemetry, uvicorn logs, tracebacks) is captured to a file.
+from app.session_log import init_session_log
+
+init_session_log()
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse

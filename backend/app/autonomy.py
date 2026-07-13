@@ -463,6 +463,11 @@ class AutonomyController:
                             except Exception:
                                 arrived = True  # can't tell -- don't get stuck here forever
                             if arrived or now - move_started_at >= PTZ_MOVE_TIMEOUT_SECONDS:
+                                print(
+                                    f"[AUTONOMY] waypoint {waypoint_index} reached "
+                                    f"after {now - move_started_at:.1f}s (arrived={arrived})",
+                                    flush=True,
+                                )
                                 waypoint_heat[waypoint_index] *= HEAT_DECAY
                                 hottest_index = max(range(len(waypoints)), key=lambda i: waypoint_heat[i])
                                 if (
@@ -504,10 +509,12 @@ class AutonomyController:
                             >= inv.wait_started_at + POST_ADJUST_SETTLE_SECONDS
                         )
                         end_investigation = False
+                        end_reason = ""
                         if not fresh:
                             if now - inv.wait_started_at >= INVESTIGATION_RESULT_TIMEOUT_SECONDS:
                                 # Detector produced nothing usable in time.
                                 end_investigation = True
+                                end_reason = "no fresh detection result"
                         else:
                             top = _largest_drone_detection(result.detections)
                             self._set_last_detection(top)
@@ -543,10 +550,16 @@ class AutonomyController:
                                     and now - inv.started_at < MOTION_STARE_SECONDS
                                 ):
                                     end_investigation = True
+                                    end_reason = (
+                                        "stare window expired"
+                                        if inv.motion_triggered
+                                        else "candidate vanished"
+                                    )
                             elif inv.zoom_attempts >= MAX_ZOOM_ATTEMPTS:
                                 # Budget exhausted without clearing the
                                 # confidence bar: not identifiable as a drone.
                                 end_investigation = True
+                                end_reason = "attempt budget exhausted"
                             else:
                                 # Below the bar: adjust zoom in the direction
                                 # most likely to help -- in for more pixels on
@@ -572,6 +585,12 @@ class AutonomyController:
                                 inv.pulse_ends_at = now + ZOOM_PULSE_SECONDS
 
                         if end_investigation:
+                            print(
+                                f"[AUTONOMY] investigation ended ({end_reason}) "
+                                f"after {now - inv.started_at:.1f}s, "
+                                f"zoom_attempts={inv.zoom_attempts}",
+                                flush=True,
+                            )
                             zoom_restore_ends_at = self._begin_zoom_restore(
                                 onvif, inv.zoom_balance_seconds, now
                             )

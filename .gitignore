@@ -10,6 +10,9 @@ venv/
 # Real captured photos of the physical camera location, not project source.
 backend/snapshots/
 
+# Per-run server session logs (telemetry capture, see app/session_log.py).
+backend/logs/
+
 # Claude Code session-local artifacts (contain machine-specific paths and,
 # in settings.local.json's case, the real camera IP in an allowlist entry).
 .claude/settings.local.json
