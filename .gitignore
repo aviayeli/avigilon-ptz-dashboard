@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.vscode/settings.json
+
+# Real captured photos of the physical camera location, not project source.
+backend/snapshots/
+
+# Claude Code session-local artifacts (contain machine-specific paths and,
+# in settings.local.json's case, the real camera IP in an allowlist entry).
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

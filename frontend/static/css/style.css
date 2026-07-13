@@ -1,0 +1,747 @@
+/* ==========================================================================
+   Base / reset
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+/* ==========================================================================
+   Button system
+   ========================================================================== */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.95rem;
+  background: none;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    transform 100ms ease;
+}
+
+/* Primary: filled accent, the dominant/repeated action (PTZ movement). */
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* Secondary: outlined/transparent, for lower-priority actions. */
+.btn-secondary {
+  background: transparent;
+  border-color: var(--color-panel-border);
+  color: var(--color-text);
+}
+
+.btn-secondary:hover {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+.btn-primary:active {
+  background: var(--color-accent-hover);
+}
+
+.btn-secondary:active {
+  background: var(--color-bg-elevated);
+}
+
+/*
+ * .is-pressed / .is-loading / .is-error are JS-driven states, not pure CSS
+ * pseudo-classes. Press-and-hold PTZ controls need a state that persists for
+ * the whole pointerdown-to-pointerup span (touch has no reliable long-press
+ * :active), and async PTZ/API calls need visible loading/error feedback that
+ * outlives a single click — so JS toggles these classes explicitly.
+ */
+.btn.is-pressed {
+  transform: scale(0.96);
+}
+
+.btn-primary.is-pressed {
+  background: var(--color-accent-hover);
+}
+
+.btn-secondary.is-pressed {
+  background: var(--color-bg-elevated);
+}
+
+.btn.is-loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.btn.is-loading .btn-label {
+  visibility: hidden;
+  opacity: 0;
+}
+
+/* Reveals the literal .spinner element markup provides (e.g. #login-submit). */
+.btn.is-loading .spinner {
+  visibility: visible;
+  opacity: 1;
+}
+
+/*
+ * Buttons that don't carry a literal .spinner element in markup (PTZ/aux
+ * buttons) still get a CSS-only spinner via ::after while loading.
+ */
+.btn.is-loading::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: currentColor;
+  animation: spin 700ms linear infinite;
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: currentColor;
+  visibility: hidden;
+  opacity: 0;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.btn.is-error {
+  border-color: var(--color-danger);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   login.html layout
+   ========================================================================== */
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Anchors the Z-pattern's starting point at the reading-direction start
+   of the card (right edge in RTL, left edge in LTR). */
+.login-brand {
+  margin-bottom: var(--space-5);
+  text-align: start;
+}
+
+.login-brand > *:first-child {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: 0.01em;
+}
+
+.login-brand > *:last-child {
+  margin-top: var(--space-1);
+  font-size: 0.9rem;
+  color: var(--color-text-dim);
+}
+
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+#login-form label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: 0.85rem;
+  color: var(--color-text-dim);
+}
+
+#login-form input {
+  display: block;
+  width: 100%;
+  min-height: var(--touch-target-min);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  transition: border-color var(--transition-fast);
+}
+
+#login-form input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-color: var(--color-accent);
+}
+
+.error-text {
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+
+/* Terminal point of the card's Z-pattern reading flow. */
+#login-submit {
+  align-self: flex-end;
+  min-width: 140px;
+  margin-top: var(--space-2);
+}
+
+/* ==========================================================================
+   index.html layout
+   ========================================================================== */
+
+.dashboard-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Top horizontal bar: F-pattern's first, dominant sweep. */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-panel-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar-brand {
+  margin-inline-end: auto;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-dim);
+  transition: background-color var(--transition-fast);
+}
+
+.status-dot.connected {
+  background: var(--color-success);
+}
+
+.status-dot.disconnected {
+  background: var(--color-danger);
+}
+
+.status-text {
+  color: var(--color-text);
+}
+
+/* Desktop: video panel dominates the top-left focal area (F-pattern),
+   info panel is the narrower secondary (30%) column. */
+.dashboard-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  align-items: start;
+}
+
+.video-panel {
+  position: relative;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+#video-stream {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--color-bg-elevated);
+}
+
+.video-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  text-align: center;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--color-text);
+  font-size: 0.95rem;
+}
+
+.video-status[hidden] {
+  display: none;
+}
+
+.alarm-banner {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-danger);
+  color: var(--color-accent-contrast);
+  font-weight: 600;
+  animation: alarm-pulse 1s ease-in-out infinite;
+}
+
+.alarm-banner[hidden] {
+  display: none;
+}
+
+@keyframes alarm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.detection-badges {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.detection-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+}
+
+.detection-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-dim);
+  transition: background-color var(--transition-fast);
+}
+
+.detection-badge.active {
+  color: var(--color-text);
+}
+
+#motion-badge.active .detection-badge-dot {
+  background: var(--color-accent);
+}
+
+#drone-badge.active .detection-badge-dot {
+  background: var(--color-danger);
+}
+
+.panel-toggle {
+  align-self: flex-start;
+  font-size: 0.8rem;
+}
+
+.collapsible-panel {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--color-text-dim);
+  animation: panel-reveal 150ms ease;
+}
+
+.collapsible-panel p {
+  margin: 0 0 var(--space-2);
+}
+
+.collapsible-panel p:last-child {
+  margin-bottom: 0;
+}
+
+.collapsible-panel[hidden] {
+  display: none;
+}
+
+@keyframes panel-reveal {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.stat-card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.info-row:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* Compact 2x2 tile layout for the channel/NVR/fps/inference stats, instead
+   of 4 stacked full-width rows -- the info-panel's stacked cards (not the
+   video) are what drive overall page height, so this is the single
+   highest-leverage change for fitting the dashboard on one screen. */
+.stat-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2) var(--space-4);
+}
+
+.stat-card-grid .info-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.stat-card-grid .info-label {
+  font-size: 0.75rem;
+}
+
+.info-label {
+  color: var(--color-text-dim);
+  font-size: 0.85rem;
+}
+
+.info-value {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.aux-controls {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+
+.search-range {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.search-range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-dim);
+}
+
+.search-range-row label {
+  width: 2.5rem;
+}
+
+.search-range-values {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.search-range-row input[type="number"] {
+  width: 4rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: var(--space-1) var(--space-2);
+}
+
+.center-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.center-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-dim);
+}
+
+.sensitivity-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-dim);
+}
+
+.sensitivity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sensitivity-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--color-accent);
+}
+
+.sensitivity-row span {
+  min-width: 3rem;
+  text-align: center;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.event-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.event-log-empty {
+  color: var(--color-text-dim);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: var(--space-3) 0;
+}
+
+.event-log-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.event-log-item-drone_detected {
+  border-inline-start: 3px solid var(--color-danger);
+}
+
+.event-log-thumb {
+  width: 3rem;
+  height: 3rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.event-log-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.event-log-time {
+  color: var(--color-text-dim);
+  font-size: 0.75rem;
+}
+
+.event-log-label {
+  color: var(--color-text);
+  overflow-wrap: break-word;
+}
+
+/* Desktop: in-flow panel below the grid. */
+.ptz-safe-zone {
+  background: var(--color-panel);
+  border-top: 1px solid var(--color-panel-border);
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
+.ptz-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: var(--space-2);
+  width: max-content;
+}
+
+.ptz-dpad .ptz-btn {
+  width: 48px;
+  height: 48px;
+}
+
+.ptz-zoom,
+.ptz-focus,
+.ptz-iris {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ptz-btn {
+  min-width: var(--touch-target-min);
+  min-height: var(--touch-target-min);
+  touch-action: none;
+}
+
+#ptz-controls.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Mobile
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    /* Reserve space roughly matching the fixed PTZ panel's height below so
+       it never overlaps the video or info content. */
+    padding-bottom: 40vh;
+  }
+
+  /*
+   * Fitts's Law: pinning every PTZ control into the bottom 30-40% of the
+   * viewport keeps them within one-handed thumb reach on mobile, so the
+   * user never has to shift their grip mid-operation.
+   */
+  .ptz-safe-zone {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 38vh;
+    overflow-y: auto;
+    z-index: 100;
+    justify-content: flex-start;
+    border-top: 1px solid var(--color-panel-border);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.45);
+    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+}

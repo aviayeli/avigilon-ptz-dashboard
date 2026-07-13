@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>לוח בקרה - Avigilon PTZ</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="theme-dark login-page">
+  <div class="login-card">
+    <div class="login-brand">
+      <h1>לוח בקרה - Avigilon PTZ</h1>
+      <p>ממשק שליטה מרחוק במצלמה</p>
+    </div>
+    <form id="login-form">
+      <label for="username">שם משתמש</label>
+      <input type="text" id="username" name="username" autocomplete="username" required>
+
+      <label for="password">סיסמה</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+      <div id="login-error" class="error-text" hidden></div>
+
+      <button type="submit" id="login-submit" class="btn btn-primary">
+        <span class="btn-label">התחברות</span>
+        <span class="spinner" hidden></span>
+      </button>
+    </form>
+  </div>
+
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

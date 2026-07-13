@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>לוח בקרה - Avigilon PTZ</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="theme-dark dashboard-page">
+  <header class="topbar">
+    <div class="topbar-brand">לוח בקרה - Avigilon PTZ</div>
+    <div id="connection-status" class="status-pill">
+      <span class="status-dot"></span>
+      <span class="status-text">בודק...</span>
+    </div>
+    <button id="logout-btn" class="btn btn-secondary">התנתקות</button>
+  </header>
+
+  <main class="dashboard-grid">
+    <section class="video-panel">
+      <img id="video-stream" alt="שידור חי מהמצלמה">
+      <div id="video-overlay" class="video-status" hidden>מתחבר מחדש לשידור...</div>
+      <div id="alarm-banner" class="alarm-banner" hidden>זוהה רחפן</div>
+      <div class="detection-badges">
+        <div id="motion-badge" class="detection-badge">
+          <span class="detection-badge-dot"></span>
+          <span class="detection-badge-label">אין תנועה</span>
+        </div>
+        <div id="drone-badge" class="detection-badge">
+          <span class="detection-badge-dot"></span>
+          <span class="detection-badge-label">אין רחפן</span>
+        </div>
+      </div>
+    </section>
+    <aside class="info-panel">
+      <div class="stat-card stat-card-grid">
+        <div class="info-row">
+          <span class="info-label">ערוץ</span>
+          <span class="info-value" id="info-channel">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">NVR</span>
+          <span class="info-value" id="info-nvr">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">קצב פריימים</span>
+          <span class="info-value" id="info-fps">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">זמן זיהוי</span>
+          <span class="info-value" id="info-inference">-</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="info-row">
+          <span class="info-label">מצב אוטונומי</span>
+          <span class="info-value" id="autonomy-status">במנוחה</span>
+        </div>
+        <button id="range-info-toggle" class="btn btn-secondary panel-toggle" type="button" aria-expanded="false">
+          &#8505; מידע על טווח זיהוי
+        </button>
+        <div id="range-info-panel" class="collapsible-panel" hidden>
+          <p>
+            המערכת מזהה עצמים באמצעות מצלמה בודדת, ללא כיול מרחק וללא חיישן טווח (לייזר/רדאר).
+            לכן הערכת המרחק המוצגת כאשר מזוהה רחפן היא <strong>הערכה גסה בלבד</strong>,
+            המבוססת על גודל התיבה המזוהה בתמונה ועל הנחת שדה ראייה משוער של המצלמה - היא אינה מדידה מדויקת.
+          </p>
+          <p>
+            ככלל אצבע: ככל שהעצם המזוהה גדול יותר בתמונה (קרוב יותר), כך הזיהוי וסיווג הרחפן אמינים יותר.
+            עצמים קטנים מאוד בתמונה (רחוקים) עלולים להיות מזוהים בפחות ביטחון - במקרה כזה המערכת תנסה
+            להתקרב (זום) כדי לשפר את הזיהוי לפני קביעה סופית.
+          </p>
+          <p>
+            <strong>לסיכום:</strong> יש להתייחס להערכת המרחק כאינדיקציה כללית בלבד, ולא כמדידה מדעית מדויקת.
+          </p>
+        </div>
+        <div class="search-range">
+          <div class="search-range-row">
+            <label for="range-pan-min">פאן</label>
+            <span class="search-range-values" dir="ltr">
+              <input type="number" id="range-pan-min" min="-100" max="100" step="1">
+              <span>&#8211;</span>
+              <input type="number" id="range-pan-max" min="-100" max="100" step="1">
+            </span>
+          </div>
+          <div class="search-range-row">
+            <label for="range-tilt-min">הטיה</label>
+            <span class="search-range-values" dir="ltr">
+              <input type="number" id="range-tilt-min" min="-100" max="100" step="1">
+              <span>&#8211;</span>
+              <input type="number" id="range-tilt-max" min="-100" max="100" step="1">
+            </span>
+          </div>
+        </div>
+        <div class="center-control">
+          <button id="set-center-btn" class="btn btn-secondary" type="button">&#127919; הגדר מיקום נוכחי כמרכז (0,0)</button>
+          <p class="center-hint">כוונו את המצלמה למיקום הרצוי ולחצו כאן - הטווחים למעלה יימדדו מאותה נקודה.</p>
+        </div>
+        <div class="sensitivity-control">
+          <label for="sensitivity-slider">רגישות זיהוי רחפן</label>
+          <div class="sensitivity-row">
+            <input type="range" id="sensitivity-slider" min="5" max="95" step="5" value="50">
+            <span id="sensitivity-value">50%</span>
+          </div>
+        </div>
+        <button id="autonomy-toggle" class="btn btn-primary">התחל סריקה</button>
+      </div>
+
+      <div class="stat-card">
+        <button id="event-log-toggle" class="btn btn-secondary panel-toggle" type="button" aria-expanded="false">
+          &#128220; יומן אירועים
+        </button>
+        <div id="event-log-panel" class="collapsible-panel" hidden>
+          <ul id="event-log-list" class="event-log-list">
+            <li class="event-log-empty">אין אירועים עדיין</li>
+          </ul>
+        </div>
+        <div class="aux-controls">
+          <button class="btn btn-secondary aux-btn" data-aux="wiper_on">מגב - הפעלה</button>
+          <button class="btn btn-secondary aux-btn" data-aux="wiper_off">מגב - כיבוי</button>
+          <button class="btn btn-secondary aux-btn" data-aux="ir_on">IR - הפעלה</button>
+          <button class="btn btn-secondary aux-btn" data-aux="ir_off">IR - כיבוי</button>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <nav id="ptz-controls" class="ptz-safe-zone" dir="ltr">
+    <div class="ptz-dpad">
+      <button id="ptz-up-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="1">&#8598;</button>
+      <button id="ptz-up" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="1">&#8593;</button>
+      <button id="ptz-up-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="1">&#8599;</button>
+      <button id="ptz-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="0">&#8592;</button>
+      <button id="ptz-home" class="btn btn-secondary ptz-btn">מרכוז</button>
+      <button id="ptz-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="0">&#8594;</button>
+      <button id="ptz-down-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="-1">&#8601;</button>
+      <button id="ptz-down" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="-1">&#8595;</button>
+      <button id="ptz-down-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="-1">&#8600;</button>
+    </div>
+    <div class="ptz-zoom">
+      <button id="zoom-out" class="btn btn-primary ptz-btn" data-zoom="-1">זום -</button>
+      <button id="zoom-in" class="btn btn-primary ptz-btn" data-zoom="1">זום +</button>
+    </div>
+    <div class="ptz-focus">
+      <button id="focus-near" class="btn btn-secondary ptz-btn" data-focus-speed="-1">פוקוס קרוב</button>
+      <button id="focus-auto" class="btn btn-secondary ptz-btn">פוקוס אוטומטי</button>
+      <button id="focus-far" class="btn btn-secondary ptz-btn" data-focus-speed="1">פוקוס רחוק</button>
+    </div>
+    <div class="ptz-iris">
+      <button id="iris-close" class="btn btn-secondary ptz-btn" data-iris-speed="-1">צמצם - סגור</button>
+      <button id="iris-open" class="btn btn-secondary ptz-btn" data-iris-speed="1">צמצם - פתח</button>
+    </div>
+  </nav>
+
+  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/video-stream.js" defer></script>
+  <script src="/static/js/ptz-controls.js" defer></script>
+  <script src="/static/js/autonomy.js" defer></script>
+  <script src="/static/js/detection-status.js" defer></script>
+  <script src="/static/js/events.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+opencv-python==4.10.0.84
+numpy==1.26.4
+onvif-zeep==0.2.12
+python-dotenv==1.0.1
+pydantic-settings==2.3.4
+python-multipart==0.0.9
+itsdangerous==2.2.0
+jinja2==3.1.4
+
+# Autonomous drone detection/tracking. CPU-only builds -- install via:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install ultralytics
+# A bare `pip install ultralytics` can otherwise resolve a CUDA torch build
+# (multi-GB) even on machines with no NVIDIA GPU.
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+ultralytics==8.4.92

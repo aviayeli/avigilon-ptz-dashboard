@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_login.py\")",
+      "PowerShell(Get-Process -Name python -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Processor)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Process -Id 11092)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\")",
+      "PowerShell(Stop-Process -Id 10520,11092,10772 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId=10888\")",
+      "PowerShell(Stop-Process -Id 5444,5576,8012 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_stage1_ui.py\")",
+      "PowerShell(Stop-Process -Id 432,1304,3612,6156,8816,9012 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_hebrew_ui.py\")",
+      "Skill(fewer-permission-prompts)",
+      "Skill(fewer-permission-prompts:*)",
+      "Read(//c/Users/user/.claude/projects/**)",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\analyze_transcripts.py\")",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\analyze_transcripts2.py\")",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Set-Location *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-CimInstance *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Test-NetConnection *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_stage23.py\")",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_stage23_events.py\")",
+      "PowerShell(Stop-Process -Id 4772,5092,11112 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(C:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\\\\venv\\\\Scripts\\\\python.exe \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-user-Documents-avigilon-ptz-dashboard\\\\6b8ccd9d-2d02-4de5-bf4e-8db1602c4c8f\\\\scratchpad\\\\test_viewport_fit.py\")",
+      "PowerShell(gh --version)",
+      "PowerShell(gh auth status 2>&1)",
+      "Read(//c/Program Files/GitHub CLI/**)",
+      "Read(//c/Program Files/Git/bin/**)"
+    ]
+  }
+}
