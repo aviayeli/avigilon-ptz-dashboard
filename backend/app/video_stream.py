@@ -70,6 +70,23 @@ _fps_window_started_at = time.monotonic()
 _latest_fps = 0.0
 FPS_WINDOW_SECONDS = 1.0
 
+# During TRACKING mode, the target is already confirmed, so running the second
+# YOLO verification pass (COCO model) wastes CPU cycles on the 2-core deployment.
+# This flag is toggled by autonomy.py to disable verification while tracking.
+_verification_lock = threading.Lock()
+_verification_enabled = True
+
+
+def set_drone_verification_enabled(enabled: bool) -> None:
+    global _verification_enabled
+    with _verification_lock:
+        _verification_enabled = enabled
+
+
+def is_drone_verification_enabled() -> bool:
+    with _verification_lock:
+        return _verification_enabled
+
 
 def get_latest_detection_result() -> Optional[DetectionResult]:
     with _detections_lock:
@@ -243,7 +260,8 @@ class VideoStreamManager:
             started = time.monotonic()
             try:
                 detections = get_drone_detector().detect(frame)
-                detections = filter_false_positive_drones(frame, detections)
+                if is_drone_verification_enabled():
+                    detections = filter_false_positive_drones(frame, detections)
             except Exception as exc:
                 print(f"[VIDEO] detection failed: {exc}", flush=True)
                 detections = []

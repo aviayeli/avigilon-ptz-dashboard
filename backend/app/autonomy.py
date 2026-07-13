@@ -9,7 +9,12 @@ from app.alarm import start_alarm, stop_alarm
 from app.detection import Detection
 from app.events import get_event_log
 from app.onvif_client import get_onvif_client
-from app.video_stream import get_latest_detections, get_motion_status, get_video_stream_manager
+from app.video_stream import (
+    get_latest_detections,
+    get_motion_status,
+    get_video_stream_manager,
+    set_drone_verification_enabled,
+)
 
 LOOP_TICK_SECONDS = 0.05
 
@@ -190,6 +195,7 @@ class AutonomyController:
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
+        set_drone_verification_enabled(True)
         self._safe_stop_camera()
         self._set_alarm(False)
         self._set_last_detection(None)
@@ -355,6 +361,8 @@ class AutonomyController:
                             f"confidence {top.confidence:.0%}",
                             frame=video.get_latest_frame_annotated(),
                         )
+                        # Disable the verification pass now that we have a confirmed target.
+                        set_drone_verification_enabled(False)
                         self._set_mode(Mode.TRACKING)
                     else:
                         self._reverse_zoom(onvif, applied_zoom_seconds)
@@ -383,6 +391,7 @@ class AutonomyController:
                         self._set_last_detection(None)
                         move_issued = False
                         get_event_log().add("target_lost", "")
+                        set_drone_verification_enabled(True)
                         self._set_mode(Mode.SEARCHING)
 
                 time.sleep(LOOP_TICK_SECONDS)
@@ -394,6 +403,7 @@ class AutonomyController:
             self._safe_stop_camera()
             self._set_alarm(False)
             self._set_last_detection(None)
+            set_drone_verification_enabled(True)
             with self._lock:
                 self._running = False
                 self._mode = Mode.IDLE
