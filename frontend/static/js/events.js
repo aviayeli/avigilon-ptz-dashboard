@@ -1,8 +1,6 @@
 'use strict';
 
 (() => {
-  wireCollapsibleToggle('event-log-toggle', 'event-log-panel');
-
   const eventLogList = document.getElementById('event-log-list');
   const sensitivitySlider = document.getElementById('sensitivity-slider');
   const sensitivityValue = document.getElementById('sensitivity-value');

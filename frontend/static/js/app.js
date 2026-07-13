@@ -24,24 +24,9 @@
     });
   }
 
-  // Wires a toggle button to show/hide a collapsible panel (used for both
-  // the range-info and event-log panels). Shared here since app.js loads
-  // first on every page.
-  function wireCollapsibleToggle(toggleId, panelId) {
-    const toggle = document.getElementById(toggleId);
-    const panel = document.getElementById(panelId);
-    if (!toggle || !panel) return;
-    toggle.addEventListener('click', () => {
-      const expanded = toggle.getAttribute('aria-expanded') === 'true';
-      toggle.setAttribute('aria-expanded', String(!expanded));
-      panel.hidden = expanded;
-    });
-  }
-
   // Shared across app.js / video-stream.js / ptz-controls.js via plain globals
   // (no ES modules, no build step — scripts load in order and share scope).
   window.Api = { postJSON };
-  window.wireCollapsibleToggle = wireCollapsibleToggle;
 
   const statusPill = document.getElementById('connection-status');
   if (statusPill) {

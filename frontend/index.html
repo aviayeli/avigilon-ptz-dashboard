@@ -20,7 +20,10 @@
     <section class="video-panel">
       <img id="video-stream" alt="שידור חי מהמצלמה">
       <div id="video-overlay" class="video-status" hidden>מתחבר מחדש לשידור...</div>
-      <div id="alarm-banner" class="alarm-banner" hidden>זוהה רחפן</div>
+      <div id="alarm-banner" class="alarm-banner" hidden>
+        <span>זוהה רחפן</span>
+        <button id="alarm-dismiss-btn" class="btn btn-secondary alarm-dismiss-btn" type="button">השתק התרעה</button>
+      </div>
       <div class="detection-badges">
         <div id="motion-badge" class="detection-badge">
           <span class="detection-badge-dot"></span>
@@ -52,15 +55,15 @@
         </div>
       </div>
 
-      <div class="stat-card">
-        <div class="info-row">
-          <span class="info-label">מצב אוטונומי</span>
-          <span class="info-value" id="autonomy-status">במנוחה</span>
+      <div class="stat-card autonomy-card">
+        <div class="card-header-row">
+          <div class="info-row">
+            <span class="info-label">מצב אוטונומי</span>
+            <span class="info-value" id="autonomy-status">במנוחה</span>
+          </div>
+          <button id="range-info-toggle" class="btn btn-secondary info-icon-btn" type="button" aria-expanded="false" aria-label="מידע על טווח זיהוי">&#8505;</button>
         </div>
-        <button id="range-info-toggle" class="btn btn-secondary panel-toggle" type="button" aria-expanded="false">
-          &#8505; מידע על טווח זיהוי
-        </button>
-        <div id="range-info-panel" class="collapsible-panel" hidden>
+        <div id="range-info-panel" class="collapsible-panel info-popover" hidden>
           <p>
             המערכת מזהה עצמים באמצעות מצלמה בודדת, ללא כיול מרחק וללא חיישן טווח (לייזר/רדאר).
             לכן הערכת המרחק המוצגת כאשר מזוהה רחפן היא <strong>הערכה גסה בלבד</strong>,
@@ -107,21 +110,11 @@
         <button id="autonomy-toggle" class="btn btn-primary">התחל סריקה</button>
       </div>
 
-      <div class="stat-card">
-        <button id="event-log-toggle" class="btn btn-secondary panel-toggle" type="button" aria-expanded="false">
-          &#128220; יומן אירועים
-        </button>
-        <div id="event-log-panel" class="collapsible-panel" hidden>
-          <ul id="event-log-list" class="event-log-list">
-            <li class="event-log-empty">אין אירועים עדיין</li>
-          </ul>
-        </div>
-        <div class="aux-controls">
-          <button class="btn btn-secondary aux-btn" data-aux="wiper_on">מגב - הפעלה</button>
-          <button class="btn btn-secondary aux-btn" data-aux="wiper_off">מגב - כיבוי</button>
-          <button class="btn btn-secondary aux-btn" data-aux="ir_on">IR - הפעלה</button>
-          <button class="btn btn-secondary aux-btn" data-aux="ir_off">IR - כיבוי</button>
-        </div>
+      <div class="stat-card event-log-card">
+        <div class="card-title">יומן אירועים</div>
+        <ul id="event-log-list" class="event-log-list">
+          <li class="event-log-empty">אין אירועים עדיין</li>
+        </ul>
       </div>
     </aside>
   </main>
@@ -151,6 +144,13 @@
       <button id="iris-close" class="btn btn-secondary ptz-btn" data-iris-speed="-1">צמצם - סגור</button>
       <button id="iris-open" class="btn btn-secondary ptz-btn" data-iris-speed="1">צמצם - פתח</button>
     </div>
+    <div class="ptz-aux">
+      <button class="btn btn-secondary aux-btn" data-aux="wiper_on">מגב - הפעלה</button>
+      <button class="btn btn-secondary aux-btn" data-aux="wiper_off">מגב - כיבוי</button>
+      <button class="btn btn-secondary aux-btn" data-aux="ir_on">IR - הפעלה</button>
+      <button class="btn btn-secondary aux-btn" data-aux="ir_off">IR - כיבוי</button>
+    </div>
+    <div id="ptz-override-hint" class="ptz-override-hint" hidden>שליטה ידנית עוצרת את הסריקה האוטונומית</div>
   </nav>
 
   <script src="/static/js/app.js" defer></script>

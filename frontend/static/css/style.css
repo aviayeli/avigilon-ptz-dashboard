@@ -11,6 +11,7 @@
 html,
 body {
   height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -168,10 +169,19 @@ a {
    index.html layout
    ========================================================================== */
 
+/*
+ * Viewport-locked app shell: three grid rows (topbar / main / PTZ bar),
+ * height pinned to the viewport with dvh preferred where supported so
+ * mobile browser chrome doesn't cause a fractional overflow. The page
+ * itself never scrolls (html, body { overflow: hidden } above) -- the
+ * event-log list is the only internal scroll container (see below).
+ */
 .dashboard-page {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
 }
 
 /* Top horizontal bar: F-pattern's first, dominant sweep. */
@@ -182,9 +192,6 @@ a {
   padding: var(--space-3) var(--space-5);
   background: var(--color-panel);
   border-bottom: 1px solid var(--color-panel-border);
-  position: sticky;
-  top: 0;
-  z-index: 10;
 }
 
 .topbar-brand {
@@ -225,18 +232,22 @@ a {
 }
 
 /* Desktop: video panel dominates the top-left focal area (F-pattern),
-   info panel is the narrower secondary (30%) column. */
+   info panel is the narrower secondary (30%) column. This is the middle
+   "1fr" row of .dashboard-page's grid, so it must itself shrink to fit
+   (min-height: 0) rather than growing to its content's natural size. */
 .dashboard-grid {
-  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 3fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-4);
-  align-items: start;
+  align-items: stretch;
 }
 
 .video-panel {
   position: relative;
+  min-width: 0;
+  min-height: 0;
   background: var(--color-bg-elevated);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -245,9 +256,9 @@ a {
 #video-stream {
   display: block;
   width: 100%;
+  height: 100%;
   max-width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
+  object-fit: contain;
   background: var(--color-bg-elevated);
 }
 
@@ -273,6 +284,9 @@ a {
   top: var(--space-3);
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--color-danger);
@@ -283,6 +297,20 @@ a {
 
 .alarm-banner[hidden] {
   display: none;
+}
+
+.alarm-dismiss-btn {
+  min-height: auto;
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-color: rgba(0, 0, 0, 0.35);
+  color: var(--color-accent-contrast);
+  animation: none;
+}
+
+.alarm-dismiss-btn:hover {
+  background: rgba(0, 0, 0, 0.4);
 }
 
 @keyframes alarm-pulse {
@@ -331,11 +359,6 @@ a {
   background: var(--color-danger);
 }
 
-.panel-toggle {
-  align-self: flex-start;
-  font-size: 0.8rem;
-}
-
 .collapsible-panel {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-panel-border);
@@ -364,10 +387,63 @@ a {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Autonomy-card header: hosts the mode status plus the range-info icon
+   button. position: relative anchors the absolutely-positioned popover
+   below so opening it overlays the card's own content instead of pushing
+   it down (the card's height never changes). */
+.card-header-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.card-header-row .info-row {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.info-icon-btn {
+  flex-shrink: 0;
+  min-height: auto;
+  min-width: auto;
+  padding: var(--space-1) var(--space-2);
+  font-size: 1rem;
+  line-height: 1;
+  position: relative;
+  z-index: 21;
+}
+
+/* Overlay variant of .collapsible-panel: absolutely positioned relative to
+   .card-header-row so toggling it never changes the surrounding layout's
+   height. It intentionally isn't clipped by the card (no overflow:hidden
+   on .autonomy-card), so it can spill over the cards below it. */
+.info-popover {
+  position: absolute;
+  top: 100%;
+  inset-inline: 0;
+  z-index: 20;
+  margin-top: var(--space-2);
+  max-height: 60vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.card-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-dim);
+}
+
 .info-panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
 }
 
 .stat-card {
@@ -378,6 +454,15 @@ a {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Event log is the single element on the page that scrolls: it absorbs
+   all remaining vertical space in the sidebar column, and its list (not
+   the card itself) is the actual overflow: auto container. */
+.event-log-card {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .info-row {
@@ -423,12 +508,6 @@ a {
 .info-value {
   color: var(--color-text);
   font-weight: 600;
-}
-
-.aux-controls {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-2);
 }
 
 .search-range {
@@ -507,7 +586,8 @@ a {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 16rem;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -560,14 +640,17 @@ a {
   overflow-wrap: break-word;
 }
 
-/* Desktop: in-flow panel below the grid. */
+/* Desktop: the bottom "auto" row of .dashboard-page's grid -- always
+   visible, compact (single row height, the d-pad being the tallest
+   element), and holds every PTZ/aux control so nothing manual lives in
+   the scrolling sidebar. */
 .ptz-safe-zone {
   background: var(--color-panel);
   border-top: 1px solid var(--color-panel-border);
   padding: var(--space-3) var(--space-5);
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   gap: var(--space-4);
 }
@@ -587,9 +670,11 @@ a {
 
 .ptz-zoom,
 .ptz-focus,
-.ptz-iris {
+.ptz-iris,
+.ptz-aux {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -599,9 +684,19 @@ a {
   touch-action: none;
 }
 
-#ptz-controls.is-disabled {
-  opacity: 0.5;
-  pointer-events: none;
+/* Shown by autonomy.js (applyMode) only while an autonomous scan/track is
+   running, to explain that pressing a manual PTZ control will take over
+   from it. PTZ controls themselves are never disabled -- the backend lets
+   manual commands preempt autonomy directly. */
+.ptz-override-hint {
+  align-self: center;
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+  max-width: 12rem;
+}
+
+.ptz-override-hint[hidden] {
+  display: none;
 }
 
 /* ==========================================================================
@@ -609,17 +704,42 @@ a {
    ========================================================================== */
 
 @media (max-width: 768px) {
+  /*
+   * Video stacks above the sidebar instead of beside it. The PTZ bar below
+   * is pulled out of grid flow (position: fixed), so .dashboard-grid's own
+   * "auto" row in .dashboard-page collapses and this element gets the rest
+   * of the viewport; padding-bottom reserves the strip the fixed bar
+   * occupies so it never overlaps the last card. Nothing here causes page
+   * scroll -- .video-panel is capped and .info-panel scrolls internally
+   * (stacking 3 cards + a log in the remaining height isn't realistic
+   * without it), which is the one extra internal scroll area point 7
+   * allows for narrow layouts.
+   */
   .dashboard-grid {
     grid-template-columns: 1fr;
-    /* Reserve space roughly matching the fixed PTZ panel's height below so
-       it never overlaps the video or info content. */
-    padding-bottom: 40vh;
+    grid-template-rows: minmax(0, 42vh) minmax(0, 1fr);
+    padding-bottom: 38vh;
+  }
+
+  .info-panel {
+    overflow-y: auto;
+  }
+
+  .event-log-card {
+    flex: none;
+  }
+
+  .event-log-list {
+    flex: none;
+    max-height: 12rem;
   }
 
   /*
    * Fitts's Law: pinning every PTZ control into the bottom 30-40% of the
    * viewport keeps them within one-handed thumb reach on mobile, so the
-   * user never has to shift their grip mid-operation.
+   * user never has to shift their grip mid-operation. It gets its own
+   * internal scroll (rather than growing taller) since the d-pad plus
+   * zoom/focus/iris/aux/hint can exceed 38vh once wrapped.
    */
   .ptz-safe-zone {
     position: fixed;

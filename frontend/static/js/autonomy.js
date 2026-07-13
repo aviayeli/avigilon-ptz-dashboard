@@ -4,7 +4,8 @@
   const toggleBtn = document.getElementById('autonomy-toggle');
   const statusEl = document.getElementById('autonomy-status');
   const alarmBanner = document.getElementById('alarm-banner');
-  const ptzControls = document.getElementById('ptz-controls');
+  const alarmDismissBtn = document.getElementById('alarm-dismiss-btn');
+  const ptzOverrideHint = document.getElementById('ptz-override-hint');
   const panMinInput = document.getElementById('range-pan-min');
   const panMaxInput = document.getElementById('range-pan-max');
   const tiltMinInput = document.getElementById('range-tilt-min');
@@ -100,10 +101,12 @@
     statusEl.textContent = MODE_LABELS[mode] || mode;
     toggleBtn.textContent = mode === 'idle' ? 'התחל סריקה' : 'עצור סריקה';
 
+    // PTZ controls themselves are never disabled here — manual commands
+    // now automatically take over from autonomy on the backend. Only the
+    // range inputs + set-center button are disabled while a scan is
+    // active, since those configure the scan itself.
     const active = mode !== 'idle';
-    if (ptzControls) {
-      ptzControls.classList.toggle('is-disabled', active);
-    }
+    if (ptzOverrideHint) ptzOverrideHint.hidden = !active;
     rangeInputs.forEach((input) => {
       if (input) input.disabled = active;
     });
@@ -119,6 +122,16 @@
     } else {
       stopAlarmTone();
     }
+  }
+
+  if (alarmDismissBtn) {
+    alarmDismissBtn.addEventListener('click', () => {
+      // Stop the local tone immediately for responsiveness; the banner
+      // itself will hide on the next status poll once the server clears
+      // alarm_active (applyAlarm above).
+      stopAlarmTone();
+      Api.postJSON('/api/autonomy/alarm/dismiss', {}).catch(() => {});
+    });
   }
 
   function pollStatus() {

@@ -6,7 +6,25 @@
   const infoFps = document.getElementById('info-fps');
   const infoInference = document.getElementById('info-inference');
 
-  wireCollapsibleToggle('range-info-toggle', 'range-info-panel');
+  // Range-info popover: absolutely positioned overlay (see .info-popover in
+  // style.css), so toggling it never changes the autonomy card's height.
+  // Closes on a second click of the toggle button or on any outside click.
+  const rangeInfoToggle = document.getElementById('range-info-toggle');
+  const rangeInfoPanel = document.getElementById('range-info-panel');
+  if (rangeInfoToggle && rangeInfoPanel) {
+    rangeInfoToggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const expanded = rangeInfoToggle.getAttribute('aria-expanded') === 'true';
+      rangeInfoToggle.setAttribute('aria-expanded', String(!expanded));
+      rangeInfoPanel.hidden = expanded;
+    });
+    document.addEventListener('click', (event) => {
+      if (rangeInfoPanel.hidden) return;
+      if (rangeInfoPanel.contains(event.target) || event.target === rangeInfoToggle) return;
+      rangeInfoPanel.hidden = true;
+      rangeInfoToggle.setAttribute('aria-expanded', 'false');
+    });
+  }
 
   if (!motionBadge && !droneBadge) return;
 
