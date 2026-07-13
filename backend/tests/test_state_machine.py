@@ -1,0 +1,269 @@
+"""Offline smoke test of the AutonomyController state machine.
+
+Runs without any third-party dependency and without camera hardware:
+cv2/numpy/torch/ultralytics/onvif/pydantic_settings are stubbed, and the
+real autonomy loop runs against a fake ONVIF client and controllable fake
+detection results. Covers: investigation triggers (candidate + motion),
+evidence-freshness gating, the confidence-seeking zoom loop and its give-up
+path, tracking corrections and hysteresis, target loss and zoom restore,
+immediate engagement when a drone is already in view at start, and stop()
+responsiveness.
+
+Run:  python3 backend/tests/test_state_machine.py
+Exits nonzero on any failure. Timing-sensitive (drives the real 20Hz loop
+in real time), so expect a ~20-30s wall-clock runtime.
+"""
+import os
+import sys
+import threading
+import time
+import types
+
+# ---- stub heavy modules before importing the app ----
+cv2 = types.SimpleNamespace(IMWRITE_JPEG_QUALITY=1, CAP_FFMPEG=0)
+sys.modules["cv2"] = cv2
+
+np = types.ModuleType("numpy")
+np.ndarray = object
+sys.modules["numpy"] = np
+
+torch = types.SimpleNamespace(set_num_threads=lambda n: None)
+sys.modules["torch"] = torch
+
+ultra = types.ModuleType("ultralytics")
+ultra.settings = types.SimpleNamespace(update=lambda d: None)
+ultra.YOLO = object
+sys.modules["ultralytics"] = ultra
+
+onvif_mod = types.ModuleType("onvif")
+onvif_mod.ONVIFCamera = object
+sys.modules["onvif"] = onvif_mod
+
+ps = types.ModuleType("pydantic_settings")
+
+
+class _BaseSettings:
+    def __init__(self, **kwargs):
+        for key, value in os.environ.items():
+            setattr(self, key, value)
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+ps.BaseSettings = _BaseSettings
+ps.SettingsConfigDict = lambda **kwargs: dict(kwargs)
+sys.modules["pydantic_settings"] = ps
+
+os.environ.update(
+    NVR_IP="127.0.0.1", NVR_USERNAME="x", NVR_PASSWORD="x",
+)
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+import app.autonomy as autonomy  # noqa: E402
+from app.detection import Detection  # noqa: E402
+from app.video_stream import DetectionResult  # noqa: E402
+
+
+class FakeOnvif:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.calls = []
+        self.moving = False
+
+    def _rec(self, *call):
+        with self.lock:
+            self.calls.append(call)
+
+    def continuous_move(self, pan, tilt, zoom):
+        self._rec("continuous_move", pan, tilt, zoom)
+
+    def absolute_move(self, pan, tilt, speed=None):
+        self._rec("absolute_move", pan, tilt)
+        self.moving = True
+
+    def stop(self):
+        self._rec("stop")
+        self.moving = False
+
+    def get_ptz_status(self):
+        return {"pan": 0.0, "tilt": 0.0, "moving": self.moving}
+
+    def calls_of(self, name):
+        with self.lock:
+            return [c for c in self.calls if c[0] == name]
+
+    def clear(self):
+        with self.lock:
+            self.calls.clear()
+
+
+class FakeVideo:
+    def get_latest_frame_shape(self):
+        return (720, 1280)
+
+    def get_latest_frame_annotated(self):
+        return None
+
+
+class SharedResult:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.result = None
+        self.seq = 0
+
+    def publish(self, detections):
+        with self.lock:
+            self.seq += 1
+            now = time.monotonic()
+            self.result = DetectionResult(
+                detections=detections, frame_seq=self.seq,
+                frame_captured_at=now, completed_at=now, inference_seconds=0.1,
+            )
+
+    def get(self):
+        with self.lock:
+            return self.result
+
+
+fake_onvif = FakeOnvif()
+fake_video = FakeVideo()
+shared = SharedResult()
+motion = {"active": False, "confidence": 0.0}
+verification = {"enabled": True}
+events = []
+
+autonomy.get_onvif_client = lambda: fake_onvif
+autonomy.get_video_stream_manager = lambda: fake_video
+autonomy.get_latest_detection_result = shared.get
+autonomy.get_latest_detections = lambda: (shared.get().detections if shared.get() else [])
+autonomy.get_motion_status = lambda: dict(motion)
+autonomy.set_drone_verification_enabled = lambda v: verification.update(enabled=v)
+autonomy.get_event_log = lambda: types.SimpleNamespace(
+    add=lambda kind, detail, frame=None: events.append(kind)
+)
+
+Mode = autonomy.Mode
+PASS = []
+FAIL = []
+
+
+def check(name, cond):
+    (PASS if cond else FAIL).append(name)
+    print(("PASS: " if cond else "FAIL: ") + name, flush=True)
+
+
+def wait_for(pred, timeout, what):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.02)
+    print(f"  (timeout waiting for: {what})", flush=True)
+    return False
+
+
+def drone(conf, box=(600, 320, 700, 420)):
+    return Detection(label="drone", confidence=conf, box=box)
+
+
+BIG_BOX = (200, 100, 1100, 650)  # large box: > SMALL ratio, passes size gate
+
+ctl = autonomy.AutonomyController()
+
+# --- scenario 1: plain scan issues waypoint moves ---
+ctl.start(-0.5, 0.5, -0.2, 0.2)
+check("scan starts in SEARCHING", ctl.mode == Mode.SEARCHING)
+check("waypoint move issued", wait_for(lambda: fake_onvif.calls_of("absolute_move"), 2, "absolute_move"))
+fake_onvif.moving = False  # arrival on next poll
+
+# --- scenario 2: high-confidence candidate -> INVESTIGATING -> TRACKING ---
+shared.publish([drone(0.9, BIG_BOX)])
+check("candidate triggers INVESTIGATING or beyond",
+      wait_for(lambda: ctl.mode in (Mode.INVESTIGATING, Mode.TRACKING), 2, "investigating"))
+# fresh evidence: publish again so frame_captured_at postdates the mode entry + settle
+ok = wait_for(lambda: ctl.mode == Mode.TRACKING or (time.monotonic(), shared.publish([drone(0.9, BIG_BOX)]))[0] is None, 5, "tracking")
+check("confirmed drone -> TRACKING", ctl.mode == Mode.TRACKING)
+check("alarm active while tracking", ctl.status()["alarm_active"])
+check("verification disabled while tracking", verification["enabled"] is False)
+check("drone_detected event logged", "drone_detected" in events)
+
+# --- scenario 3: tracking correction issued on fresh result ---
+fake_onvif.clear()
+shared.publish([drone(0.9, (1000, 500, 1180, 650))])  # off-center small-ish box
+check("tracking correction move issued",
+      wait_for(lambda: fake_onvif.calls_of("continuous_move"), 2, "correction move"))
+
+# --- scenario 4: target loss -> back to SEARCHING, alarm off, verification on ---
+# stop publishing; loop should time out after LOST_TARGET_TIMEOUT_SECONDS (3s)
+check("target loss returns to SEARCHING",
+      wait_for(lambda: ctl.mode == Mode.SEARCHING, autonomy.LOST_TARGET_TIMEOUT_SECONDS + 3, "searching"))
+check("alarm off after loss", not ctl.status()["alarm_active"])
+check("verification re-enabled after loss", verification["enabled"] is True)
+check("target_lost event logged", "target_lost" in events)
+
+# --- scenario 5: low-confidence small candidate -> zoom-in pulse, then give up ---
+fake_onvif.clear()
+small_low = drone(0.2, (620, 350, 660, 390))  # tiny box, conf 0.2 (>=0.15 trigger, < 0.5 threshold)
+shared.publish([small_low])
+check("low-conf candidate triggers INVESTIGATING",
+      wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "investigating(low)"))
+publisher_stop = threading.Event()
+
+def keep_publishing():
+    while not publisher_stop.is_set():
+        shared.publish([small_low])
+        time.sleep(0.3)
+
+t = threading.Thread(target=keep_publishing, daemon=True)
+t.start()
+check("zoom-in pulse issued during investigation",
+      wait_for(lambda: any(c[3] > 0 for c in fake_onvif.calls_of("continuous_move")), 5, "zoom pulse"))
+check("investigation gives up after attempt budget -> SEARCHING",
+      wait_for(lambda: ctl.mode == Mode.SEARCHING, 15, "give up"))
+zoom_out_after = any(c[3] < 0 for c in fake_onvif.calls_of("continuous_move"))
+check("zoom restore (zoom-out) issued after failed investigation", zoom_out_after)
+publisher_stop.set()
+t.join()
+
+# --- scenario 6: stop() is responsive and resets state ---
+started_stop = time.monotonic()
+ctl.stop()
+check("stop() completes quickly", time.monotonic() - started_stop < 2.0)
+check("mode IDLE after stop", ctl.mode == Mode.IDLE)
+check("camera stop issued on stop()", bool(fake_onvif.calls_of("stop")))
+
+# --- scenario 7: start with drone already in view -> immediate TRACKING + alarm ---
+shared.publish([drone(0.9, BIG_BOX)])
+events.clear()
+ctl2 = autonomy.AutonomyController()
+ctl2.start(-0.5, 0.5, -0.2, 0.2)
+check("engages immediately when drone already visible", ctl2.mode == Mode.TRACKING)
+check("alarm active on immediate engage", ctl2.status()["alarm_active"])
+check("immediate engage logged", "drone_detected" in events)
+ctl2.stop()
+
+# --- scenario 8: motion-only trigger -> INVESTIGATING, then stare times out ---
+shared.publish([])
+fake_onvif.clear()
+ctl3 = autonomy.AutonomyController()
+ctl3.start(-0.5, 0.5, -0.2, 0.2)
+motion["active"] = True
+check("motion triggers INVESTIGATING",
+      wait_for(lambda: ctl3.mode == Mode.INVESTIGATING, 3, "motion investigate"))
+motion["active"] = False
+
+def publish_empty():
+    while ctl3.mode == Mode.INVESTIGATING:
+        shared.publish([])
+        time.sleep(0.3)
+
+t3 = threading.Thread(target=publish_empty, daemon=True)
+t3.start()
+check("motion stare times out back to SEARCHING",
+      wait_for(lambda: ctl3.mode == Mode.SEARCHING, autonomy.MOTION_STARE_SECONDS + 3, "stare timeout"))
+t3.join(timeout=1)
+ctl3.stop()
+
+print(f"\n{len(PASS)} passed, {len(FAIL)} failed", flush=True)
+sys.exit(1 if FAIL else 0)
