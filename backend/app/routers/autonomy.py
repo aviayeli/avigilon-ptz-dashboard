@@ -48,6 +48,12 @@ def stop():
     return {"ok": True}
 
 
+@router.post("/alarm/dismiss")
+def dismiss_alarm():
+    get_autonomy_controller().dismiss_alarm()
+    return {"ok": True}
+
+
 @router.get("/status")
 def status():
     return get_autonomy_controller().status()

@@ -198,6 +198,13 @@ class AutonomyController:
         if was_running:
             get_event_log().add("search_stopped", "")
 
+    def dismiss_alarm(self) -> None:
+        # Operator acknowledgement: silences the alarm (server + browser via
+        # the polled status) without changing mode. If still TRACKING, the
+        # camera keeps following the target silently; the alarm re-arms only
+        # on the next INVESTIGATING -> TRACKING confirmation.
+        self._set_alarm(False)
+
     def _is_running(self) -> bool:
         with self._lock:
             return self._running

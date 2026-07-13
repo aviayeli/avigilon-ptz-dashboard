@@ -9,9 +9,13 @@ from app.onvif_client import get_onvif_client
 router = APIRouter(prefix="/api/ptz")
 
 
-def require_manual_control() -> None:
-    if get_autonomy_controller().mode != Mode.IDLE:
-        raise HTTPException(409, "Autonomous search is active")
+def take_manual_control() -> None:
+    # Operator always wins: a manual PTZ command while autonomy is active
+    # stops the autonomous loop (and any motion it commanded) before the
+    # manual command executes, instead of rejecting the operator with a 409.
+    controller = get_autonomy_controller()
+    if controller.mode != Mode.IDLE:
+        controller.stop()
 
 
 class MoveRequest(BaseModel):
@@ -33,7 +37,7 @@ class AuxRequest(BaseModel):
     command: str
 
 
-@router.post("/move", dependencies=[Depends(require_manual_control)])
+@router.post("/move", dependencies=[Depends(take_manual_control)])
 def move(payload: MoveRequest):
     try:
         get_onvif_client().continuous_move(payload.pan, payload.tilt, payload.zoom)
@@ -42,7 +46,7 @@ def move(payload: MoveRequest):
     return {"ok": True}
 
 
-@router.post("/stop", dependencies=[Depends(require_manual_control)])
+@router.post("/stop", dependencies=[Depends(take_manual_control)])
 def stop():
     try:
         get_onvif_client().stop()
@@ -51,7 +55,7 @@ def stop():
     return {"ok": True}
 
 
-@router.post("/home", dependencies=[Depends(require_manual_control)])
+@router.post("/home", dependencies=[Depends(take_manual_control)])
 def home():
     try:
         get_onvif_client().goto_home()
@@ -60,7 +64,7 @@ def home():
     return {"ok": True}
 
 
-@router.post("/center", dependencies=[Depends(require_manual_control)])
+@router.post("/center", dependencies=[Depends(take_manual_control)])
 def set_center():
     # Saves wherever the camera currently is (position it first via manual
     # controls) as the (0, 0) reference for pan/tilt search ranges --
