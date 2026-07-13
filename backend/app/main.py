@@ -12,13 +12,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.autonomy import get_autonomy_controller
-from app.routers import autonomy, detection, events, ptz, stream, system
+from app.routers import autonomy, config, detection, events, ptz, stream, system
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 
 app = FastAPI(title="Avigilon PTZ Dashboard")
 
 app.include_router(autonomy.router)
+app.include_router(config.router)
 app.include_router(detection.router)
 app.include_router(events.router)
 app.include_router(ptz.router)

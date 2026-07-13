@@ -14,7 +14,45 @@
       <span class="status-dot"></span>
       <span class="status-text">בודק...</span>
     </div>
+    <button id="config-open-btn" class="btn btn-secondary" type="button" aria-label="הגדרות חיבור">&#9881;</button>
   </header>
+
+  <div id="config-modal" class="modal-backdrop" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="config-modal-title">
+      <h2 id="config-modal-title" class="modal-title">הגדרות חיבור למצלמה/NVR</h2>
+      <div class="modal-field">
+        <label for="config-nvr-ip">כתובת NVR</label>
+        <input type="text" id="config-nvr-ip">
+      </div>
+      <div class="modal-field">
+        <label for="config-nvr-port">פורט RTSP</label>
+        <input type="number" id="config-nvr-port" min="1" max="65535">
+      </div>
+      <div class="modal-field">
+        <label for="config-onvif-port">פורט ONVIF</label>
+        <input type="number" id="config-onvif-port" min="1" max="65535">
+      </div>
+      <div class="modal-field">
+        <label for="config-username">שם משתמש</label>
+        <input type="text" id="config-username">
+      </div>
+      <div class="modal-field">
+        <label for="config-password">סיסמה</label>
+        <input type="password" id="config-password" placeholder="(ללא שינוי)">
+      </div>
+      <div class="modal-field">
+        <label for="config-channel">ערוץ מצלמה</label>
+        <input type="number" id="config-channel" min="0">
+      </div>
+      <div id="config-status" class="modal-status"></div>
+      <p class="modal-note">שמירה דורשת הפעלה מחדש של השרת כדי להיכנס לתוקף.</p>
+      <div class="modal-actions">
+        <button id="config-test-btn" class="btn btn-secondary" type="button">בדוק חיבור</button>
+        <button id="config-save-btn" class="btn btn-primary" type="button">שמור</button>
+        <button id="config-close-btn" class="btn btn-secondary" type="button">סגור</button>
+      </div>
+    </div>
+  </div>
 
   <main class="dashboard-grid">
     <section class="video-panel">
@@ -154,6 +192,7 @@
   </nav>
 
   <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/config.js" defer></script>
   <script src="/static/js/video-stream.js" defer></script>
   <script src="/static/js/ptz-controls.js" defer></script>
   <script src="/static/js/autonomy.js" defer></script>
