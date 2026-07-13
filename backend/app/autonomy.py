@@ -1,14 +1,11 @@
-import tempfile
 import threading
 import time
 import traceback
-import winsound
 from enum import Enum
 from functools import lru_cache
-from math import pi, sin
-from struct import pack
 from typing import Optional
 
+from app.alarm import start_alarm, stop_alarm
 from app.detection import Detection
 from app.events import get_event_log
 from app.onvif_client import get_onvif_client
@@ -73,52 +70,6 @@ class Mode(str, Enum):
     SEARCHING = "searching"
     INVESTIGATING = "investigating"
     TRACKING = "tracking"
-
-
-def _make_alarm_wav() -> bytes:
-    # Short sine-wave alarm tone generated in memory -- no audio asset file.
-    sample_rate = 8000
-    duration_seconds = 0.5
-    frequency = 900
-    num_samples = int(sample_rate * duration_seconds)
-    samples = bytearray()
-    for i in range(num_samples):
-        t = i / sample_rate
-        value = int(32767 * sin(2 * pi * frequency * t))
-        samples += pack("<h", value)
-
-    data = bytes(samples)
-    header = pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + len(data),
-        b"WAVE",
-        b"fmt ",
-        16,
-        1,  # PCM
-        1,  # mono
-        sample_rate,
-        sample_rate * 2,
-        2,
-        16,
-        b"data",
-        len(data),
-    )
-    return header + data
-
-
-def _write_alarm_wav_file() -> str:
-    # winsound.PlaySound() disallows SND_MEMORY combined with SND_ASYNC (it
-    # can't guarantee the Python bytes buffer stays alive for the duration
-    # of async/looped playback) -- writing to a temp file sidesteps that,
-    # since the OS then reads directly from disk.
-    fd, path = tempfile.mkstemp(suffix=".wav", prefix="ptz_alarm_")
-    with open(fd, "wb") as f:
-        f.write(_make_alarm_wav())
-    return path
-
-
-_ALARM_WAV_PATH = _write_alarm_wav_file()
 
 
 def _box_area(box: tuple[int, int, int, int]) -> int:
@@ -265,11 +216,9 @@ class AutonomyController:
                 return
             self._alarm_active = active
         if active:
-            winsound.PlaySound(
-                _ALARM_WAV_PATH, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP
-            )
+            start_alarm()
         else:
-            winsound.PlaySound(None, 0)
+            stop_alarm()
 
     def _safe_stop_camera(self) -> None:
         try:
