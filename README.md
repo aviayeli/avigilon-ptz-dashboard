@@ -7,6 +7,8 @@
 [![ONVIF](https://img.shields.io/badge/ONVIF-PTZ%20primitives-orange)](#hardware--environment-profile)
 [![UI](https://img.shields.io/badge/UI-Hebrew%20RTL%20·%20zero--scroll-lightgrey)](#core-architecture)
 
+> **🇮🇱 מדריך מפעיל בעברית:** the full Hebrew operator manual is available at [`docs/README.he.md`](docs/README.he.md).
+
 An autonomous counter-drone surveillance system built around a single Avigilon H6A PTZ camera. The camera continuously scans an operator-defined zone, investigates motion and detection candidates by actively adjusting its own zoom until it can classify them with confidence, and — when a drone is confirmed — locks on, tracks it with closed-loop visual servoing, and raises a dual (server + browser) alarm. A human operator retains unconditional override authority at all times.
 
 The entire autonomy stack is custom-built and vendor-neutral: the camera is driven exclusively through primitive ONVIF commands, with no reliance on vendor tours, presets, or built-in analytics.
