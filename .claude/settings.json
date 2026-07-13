@@ -34,7 +34,8 @@
       "PowerShell(gh --version)",
       "PowerShell(gh auth status 2>&1)",
       "Read(//c/Program Files/GitHub CLI/**)",
-      "Read(//c/Program Files/Git/bin/**)"
+      "Read(//c/Program Files/Git/bin/**)",
+      "PowerShell(git -C \"c:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\" status)"
     ]
   }
 }
