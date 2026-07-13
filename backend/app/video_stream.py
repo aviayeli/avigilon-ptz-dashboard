@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
@@ -20,6 +21,7 @@ MJPEG_FRAME_INTERVAL_SECONDS = 1 / 15
 JPEG_ENCODE_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 85]
 
 DETECTION_INTERVAL_SECONDS = 1.0
+DETECTION_IDLE_POLL_SECONDS = 0.05
 DRONE_BOX_COLOR = (0, 0, 255)  # BGR red
 OTHER_BOX_COLOR = (0, 165, 255)  # BGR orange
 
@@ -29,12 +31,26 @@ OTHER_BOX_COLOR = (0, 165, 255)  # BGR orange
 MOTION_PIXEL_DIFF_THRESHOLD = 25
 MOTION_AREA_RATIO_THRESHOLD = 0.02
 
-# Module-level (not instance) state: process_frame is deliberately a free
-# function (see below), so the latest detections/motion live here instead of
-# on VideoStreamManager, each guarded by their own lock.
+
+@dataclass
+class DetectionResult:
+    # Detections plus the identity and capture time of the exact frame they
+    # were computed from. Control code needs this to distinguish fresh
+    # results from stale ones (inference runs at ~1Hz while the autonomy
+    # loop ticks at 20Hz) -- e.g. "was this computed from a frame captured
+    # AFTER my zoom move finished?".
+    detections: list[Detection]
+    frame_seq: int
+    frame_captured_at: float  # time.monotonic() when the frame was captured
+    completed_at: float  # time.monotonic() when inference finished
+    inference_seconds: float
+
+
+# Module-level (not instance) state: the latest detections/motion are shared
+# read-mostly results consumed from several threads (autonomy loop, API
+# routers, MJPEG generators), each guarded by their own lock.
 _detections_lock = threading.Lock()
-_last_inference_at = 0.0
-_latest_detections: list[Detection] = []
+_latest_result: Optional[DetectionResult] = None
 
 _motion_lock = threading.Lock()
 _previous_gray_frame: Optional[np.ndarray] = None
@@ -47,9 +63,14 @@ _latest_fps = 0.0
 FPS_WINDOW_SECONDS = 1.0
 
 
+def get_latest_detection_result() -> Optional[DetectionResult]:
+    with _detections_lock:
+        return _latest_result
+
+
 def get_latest_detections() -> list[Detection]:
     with _detections_lock:
-        return list(_latest_detections)
+        return list(_latest_result.detections) if _latest_result else []
 
 
 def get_motion_status() -> dict:
@@ -106,59 +127,37 @@ def _draw_detection(frame: np.ndarray, detection: Detection) -> None:
     cv2.putText(frame, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 
-def process_frame(frame: np.ndarray) -> np.ndarray:
-    # Runs continuously on the live stream (independent of whether autonomous
-    # search is active) so detections are always visible, and autonomy.py
-    # reads the same shared results via get_latest_detections() instead of
-    # running its own separate inference pass.
-    global _last_inference_at, _latest_detections
-
-    # Motion must be computed on the clean frame, before any boxes are
-    # drawn onto it below (drawing mutates frame in place).
-    _update_motion(frame)
-
-    now = time.monotonic()
-    if now - _last_inference_at >= DETECTION_INTERVAL_SECONDS:
-        _last_inference_at = now
-        try:
-            detections = get_drone_detector().detect(frame)
-            detections = filter_false_positive_drones(frame, detections)
-        except Exception as exc:
-            print(f"[VIDEO] detection failed: {exc}", flush=True)
-            detections = []
-        with _detections_lock:
-            _latest_detections = detections
-
-    with _detections_lock:
-        detections = _latest_detections
-
-    for detection in detections:
-        _draw_detection(frame, detection)
-
-    return frame
-
-
 class VideoStreamManager:
     def __init__(self, stream_url: str) -> None:
         self._stream_url = stream_url
         self._cap: Optional[cv2.VideoCapture] = None
+        # The stored frame is always clean (no overlay) and is never mutated
+        # after publication -- all drawing happens on copies. That invariant
+        # is what lets the detection worker borrow it by reference below.
         self._latest_frame: Optional[np.ndarray] = None
+        self._frame_seq = 0
+        self._frame_captured_at = 0.0
         self._lock = threading.Lock()
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._capture_thread: Optional[threading.Thread] = None
+        self._detection_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._thread.start()
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
+        self._detection_thread = threading.Thread(target=self._detection_loop, daemon=True)
+        self._detection_thread.start()
 
     def stop(self) -> None:
         self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+        for thread in (self._capture_thread, self._detection_thread):
+            if thread is not None:
+                thread.join(timeout=2.0)
+        self._capture_thread = None
+        self._detection_thread = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None
@@ -184,13 +183,81 @@ class VideoStreamManager:
                 continue
 
             _record_frame_for_fps()
-            processed = process_frame(frame)
+            # Motion is computed on the clean frame, on this thread, every
+            # frame -- it's cheap. YOLO inference is NOT: it runs on the
+            # dedicated detection thread so a ~250ms (worst case ~500ms with
+            # the verification pass) call can never block capture and back
+            # frames up in the RTSP/TCP buffer, which showed up as live-view
+            # latency growing exactly when something was detected.
+            _update_motion(frame)
             with self._lock:
-                self._latest_frame = processed
+                self._latest_frame = frame
+                self._frame_seq += 1
+                self._frame_captured_at = time.monotonic()
+
+    def _borrow_frame_for_detection(self) -> Optional[tuple[np.ndarray, int, float]]:
+        # Returns the stored frame by reference, NOT a copy: published frames
+        # are immutable (see __init__), and skipping a ~6MB copy per
+        # inference matters on the 2-core deployment CPU.
+        with self._lock:
+            if self._latest_frame is None:
+                return None
+            return self._latest_frame, self._frame_seq, self._frame_captured_at
+
+    def _detection_loop(self) -> None:
+        global _latest_result
+        last_seq = -1
+        next_start_at = 0.0
+        while self._running:
+            now = time.monotonic()
+            if now < next_start_at:
+                time.sleep(min(DETECTION_IDLE_POLL_SECONDS, next_start_at - now))
+                continue
+
+            borrowed = self._borrow_frame_for_detection()
+            if borrowed is None or borrowed[1] == last_seq:
+                time.sleep(DETECTION_IDLE_POLL_SECONDS)
+                continue
+            frame, seq, captured_at = borrowed
+            last_seq = seq
+
+            started = time.monotonic()
+            try:
+                detections = get_drone_detector().detect(frame)
+                detections = filter_false_positive_drones(frame, detections)
+            except Exception as exc:
+                print(f"[VIDEO] detection failed: {exc}", flush=True)
+                detections = []
+            finished = time.monotonic()
+
+            result = DetectionResult(
+                detections=detections,
+                frame_seq=seq,
+                frame_captured_at=captured_at,
+                completed_at=finished,
+                inference_seconds=finished - started,
+            )
+            with _detections_lock:
+                _latest_result = result
+
+            # Pace by inference *start* time so the configured cadence holds
+            # regardless of how long inference itself took; always consumes
+            # the newest frame and simply skips the ones it can't keep up with.
+            next_start_at = started + DETECTION_INTERVAL_SECONDS
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
         with self._lock:
             return None if self._latest_frame is None else self._latest_frame.copy()
+
+    def get_latest_frame_annotated(self) -> Optional[np.ndarray]:
+        # The stored frame is clean, so operator-facing images (MJPEG stream,
+        # event snapshots) get the current detection boxes drawn onto a copy.
+        frame = self.get_latest_frame()
+        if frame is None:
+            return None
+        for detection in get_latest_detections():
+            _draw_detection(frame, detection)
+        return frame
 
     def get_latest_frame_width(self) -> Optional[int]:
         # Cheap alternative to get_latest_frame() for callers that only need
@@ -210,7 +277,7 @@ class VideoStreamManager:
 
     def mjpeg_generator(self):
         while True:
-            frame = self.get_latest_frame()
+            frame = self.get_latest_frame_annotated()
             if frame is None:
                 time.sleep(0.1)
                 continue

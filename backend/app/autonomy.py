@@ -90,8 +90,8 @@ def _largest_drone_detection(detections: list[Detection]) -> Optional[Detection]
 
 def is_drone_currently_present() -> bool:
     # Detection runs continuously regardless of search state (see
-    # video_stream.process_frame), so this reflects the live camera view at
-    # the moment it's called -- used as a pre-flight safety check before
+    # VideoStreamManager._detection_loop), so this reflects the live camera
+    # view at the moment it's called -- used as a pre-flight safety check before
     # starting a new scan.
     threshold = get_confidence_threshold()
     return any(
@@ -257,7 +257,7 @@ class AutonomyController:
                 # of copying the full ~6MB frame on every tick (20x/sec).
                 frame_shape = video.get_latest_frame_shape()
                 # Detection itself runs continuously in the video pipeline
-                # (video_stream.process_frame), independent of search state,
+                # (VideoStreamManager._detection_loop), independent of search state,
                 # so viewers see live boxes even when autonomy is idle. This
                 # loop just reads the shared, already-computed result.
                 last_detections = get_latest_detections()
@@ -346,7 +346,7 @@ class AutonomyController:
                         get_event_log().add(
                             "drone_detected",
                             f"confidence {top.confidence:.0%}",
-                            frame=video.get_latest_frame(),
+                            frame=video.get_latest_frame_annotated(),
                         )
                         self._set_mode(Mode.TRACKING)
                     else:
