@@ -13,10 +13,6 @@ class Settings(BaseSettings):
     NVR_PASSWORD: str
     CAMERA_CHANNEL_ID: int = 0
 
-    DASHBOARD_USERNAME: str
-    DASHBOARD_PASSWORD: str
-    SESSION_SECRET_KEY: str
-
 
 @lru_cache
 def get_settings() -> Settings:

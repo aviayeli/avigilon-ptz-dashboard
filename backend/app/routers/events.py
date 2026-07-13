@@ -1,12 +1,11 @@
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.events import SNAPSHOT_DIR, get_event_log
-from app.routers.auth import require_auth
 
-router = APIRouter(prefix="/api/events", dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/events")
 
 # Snapshot filenames are always generated as "<millis>.jpg" by EventLog --
 # reject anything else so a crafted filename can't be used for path traversal.

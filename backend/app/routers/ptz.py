@@ -5,9 +5,8 @@ from pydantic import BaseModel
 
 from app.autonomy import Mode, get_autonomy_controller
 from app.onvif_client import get_onvif_client
-from app.routers.auth import require_auth
 
-router = APIRouter(prefix="/api/ptz", dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/ptz")
 
 
 def require_manual_control() -> None:

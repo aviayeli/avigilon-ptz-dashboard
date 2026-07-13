@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.autonomy import get_autonomy_controller
 from app.onvif_client import get_onvif_client
-from app.routers.auth import require_auth
 
-router = APIRouter(prefix="/api/autonomy", dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/autonomy")
 
 # The dashboard presents pan/tilt range as a friendly -100..100 scale rather
 # than the camera's native normalized -1..1 ONVIF position space.

@@ -136,21 +136,8 @@ a {
   opacity: 0.7;
 }
 
-.btn.is-loading .btn-label {
-  visibility: hidden;
-  opacity: 0;
-}
-
-/* Reveals the literal .spinner element markup provides (e.g. #login-submit). */
-.btn.is-loading .spinner {
-  visibility: visible;
-  opacity: 1;
-}
-
-/*
- * Buttons that don't carry a literal .spinner element in markup (PTZ/aux
- * buttons) still get a CSS-only spinner via ::after while loading.
- */
+/* CSS-only spinner shown via ::after while a button is loading (PTZ/aux
+   buttons etc.). */
 .btn.is-loading::after {
   content: "";
   position: absolute;
@@ -159,18 +146,6 @@ a {
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.35);
   border-top-color: currentColor;
-  animation: spin 700ms linear infinite;
-}
-
-.spinner {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: currentColor;
-  visibility: hidden;
-  opacity: 0;
   animation: spin 700ms linear infinite;
 }
 
@@ -187,91 +162,6 @@ a {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-/* ==========================================================================
-   login.html layout
-   ========================================================================== */
-
-.login-page {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
-}
-
-.login-card {
-  width: 100%;
-  max-width: 400px;
-  background: var(--color-panel);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-6);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-}
-
-/* Anchors the Z-pattern's starting point at the reading-direction start
-   of the card (right edge in RTL, left edge in LTR). */
-.login-brand {
-  margin-bottom: var(--space-5);
-  text-align: start;
-}
-
-.login-brand > *:first-child {
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--color-text);
-  letter-spacing: 0.01em;
-}
-
-.login-brand > *:last-child {
-  margin-top: var(--space-1);
-  font-size: 0.9rem;
-  color: var(--color-text-dim);
-}
-
-#login-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-#login-form label {
-  display: block;
-  margin-bottom: var(--space-1);
-  font-size: 0.85rem;
-  color: var(--color-text-dim);
-}
-
-#login-form input {
-  display: block;
-  width: 100%;
-  min-height: var(--touch-target-min);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  transition: border-color var(--transition-fast);
-}
-
-#login-form input:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-color: var(--color-accent);
-}
-
-.error-text {
-  color: var(--color-danger);
-  font-size: 0.85rem;
-}
-
-/* Terminal point of the card's Z-pattern reading flow. */
-#login-submit {
-  align-self: flex-end;
-  min-width: 140px;
-  margin-top: var(--space-2);
 }
 
 /* ==========================================================================

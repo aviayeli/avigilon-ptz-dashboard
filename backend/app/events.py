@@ -46,8 +46,8 @@ class EventLog:
         if not ok:
             return None
         (SNAPSHOT_DIR / filename).write_bytes(buffer.tobytes())
-        # Served through an authenticated endpoint, not a public static mount --
-        # this is sensitive camera footage, not a generic static asset.
+        # Served through the events API, not a public static mount -- this
+        # is sensitive camera footage, not a generic static asset.
         return f"/api/events/snapshots/{filename}"
 
     def get_recent(self, limit: int = 50) -> list[dict]:

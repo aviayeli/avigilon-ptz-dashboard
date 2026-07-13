@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.autonomy import (
@@ -8,7 +8,6 @@ from app.autonomy import (
     set_confidence_threshold,
 )
 from app.detection import estimate_distance_meters
-from app.routers.auth import require_auth
 from app.video_stream import (
     get_latest_detections,
     get_motion_status,
@@ -16,7 +15,7 @@ from app.video_stream import (
     get_video_stream_manager,
 )
 
-router = APIRouter(prefix="/api/detection", dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/detection")
 
 DRONE_LABEL = "drone"
 

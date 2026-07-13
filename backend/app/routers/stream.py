@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from app.routers.auth import require_auth
 from app.video_stream import get_video_stream_manager
 
-router = APIRouter(prefix="/api/stream", dependencies=[Depends(require_auth)])
+router = APIRouter(prefix="/api/stream")
 
 
 @router.get("/mjpeg")

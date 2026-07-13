@@ -1,9 +1,8 @@
 'use strict';
 
 /*
- * Shared bootstrap for both login.html and index.html. Every handler below
- * guards on the relevant element existing, since this same script loads on
- * both pages.
+ * Bootstrap for index.html. Every handler below guards on the relevant
+ * element existing.
  */
 (() => {
   function postJSON(url, body) {
@@ -43,55 +42,6 @@
   // (no ES modules, no build step — scripts load in order and share scope).
   window.Api = { postJSON };
   window.wireCollapsibleToggle = wireCollapsibleToggle;
-
-  // ---- Login page ----
-  const loginForm = document.getElementById('login-form');
-  if (loginForm) {
-    const usernameInput = document.getElementById('username');
-    const passwordInput = document.getElementById('password');
-    const errorEl = document.getElementById('login-error');
-    const submitBtn = document.getElementById('login-submit');
-
-    loginForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      if (errorEl) errorEl.hidden = true;
-      if (submitBtn) {
-        submitBtn.classList.add('is-loading');
-        submitBtn.disabled = true;
-      }
-
-      Api.postJSON('/api/auth/login', {
-        username: usernameInput ? usernameInput.value : '',
-        password: passwordInput ? passwordInput.value : ''
-      })
-        .then(() => {
-          window.location.href = '/';
-        })
-        .catch((err) => {
-          if (errorEl) {
-            errorEl.textContent = err.message || 'ההתחברות נכשלה.';
-            errorEl.hidden = false;
-          }
-          if (submitBtn) {
-            submitBtn.classList.remove('is-loading');
-            submitBtn.disabled = false;
-          }
-        });
-    });
-  }
-
-  // ---- Dashboard page ----
-  const logoutBtn = document.getElementById('logout-btn');
-  if (logoutBtn) {
-    logoutBtn.addEventListener('click', () => {
-      // Best-effort logout: redirect regardless of whether the API call succeeds.
-      Api.postJSON('/api/auth/logout', {})
-        .catch(() => {})
-        .then(() => {
-          window.location.href = '/login';
-        });
-    });
-  }
 
   const statusPill = document.getElementById('connection-status');
   if (statusPill) {
