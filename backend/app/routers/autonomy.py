@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.autonomy import get_autonomy_controller
@@ -36,9 +36,9 @@ def start(payload: StartRequest):
     if tilt_min > tilt_max:
         tilt_min, tilt_max = tilt_max, tilt_min
 
-    started = get_autonomy_controller().start(pan_min, pan_max, tilt_min, tilt_max)
-    if not started:
-        raise HTTPException(409, "לא ניתן להתחיל סריקה - רחפן כבר מזוהה בשדה הראייה")
+    # If a drone is already in view, start() engages it immediately
+    # (tracking + alarm) instead of refusing.
+    get_autonomy_controller().start(pan_min, pan_max, tilt_min, tilt_max)
     return {"ok": True}
 
 
