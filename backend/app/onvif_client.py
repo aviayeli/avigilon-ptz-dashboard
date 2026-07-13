@@ -1,3 +1,5 @@
+import threading
+import time
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -33,6 +35,36 @@ class OnvifClient:
         # until explicitly set.
         self._center_pan = 0.0
         self._center_tilt = 0.0
+        # Camera-motion bookkeeping for the motion-detection frame-diff (see
+        # video_stream.py's _update_motion): reads happen from the video
+        # capture thread, writes happen from autonomy/API threads issuing PTZ
+        # commands, so this is guarded by its own lock rather than relying on
+        # the GIL.
+        self._motion_state_lock = threading.Lock()
+        self._camera_moving: bool = False
+        self._camera_motion_ended_at: float = 0.0
+
+    def _mark_camera_moving(self) -> None:
+        with self._motion_state_lock:
+            self._camera_moving = True
+
+    def _mark_camera_stopped(self) -> None:
+        # Idempotent on purpose: only record the end timestamp on a
+        # True->False transition, so repeated stop() calls (or repeated
+        # not-moving status polls) don't keep pushing the settle window
+        # forward and never let motion detection resume.
+        with self._motion_state_lock:
+            if self._camera_moving:
+                self._camera_moving = False
+                self._camera_motion_ended_at = time.monotonic()
+
+    def is_camera_motion_settled(self, settle_seconds: float) -> bool:
+        # Cheap, no SOAP call -- safe to poll from the video capture thread
+        # on every frame.
+        with self._motion_state_lock:
+            if self._camera_moving:
+                return False
+            return (time.monotonic() - self._camera_motion_ended_at) >= settle_seconds
 
     @property
     def camera(self) -> ONVIFCamera:
@@ -114,6 +146,12 @@ class OnvifClient:
             "Zoom": {"x": _clamp(zoom)},
         }
         self.ptz_service.ContinuousMove(request)
+        # Mark state only after the SOAP call returns successfully -- if it
+        # raised, the camera never got the command.
+        if pan != 0.0 or tilt != 0.0 or zoom != 0.0:
+            self._mark_camera_moving()
+        else:
+            self._mark_camera_stopped()
 
     def stop(self) -> None:
         profile = self.get_channel_profile()
@@ -122,6 +160,7 @@ class OnvifClient:
         request.PanTilt = True
         request.Zoom = True
         self.ptz_service.Stop(request)
+        self._mark_camera_stopped()
 
     def absolute_move(self, pan: float, tilt: float, speed: Optional[float] = None) -> None:
         profile = self.get_channel_profile()
@@ -131,16 +170,33 @@ class OnvifClient:
         if speed is not None:
             request.Speed = {"PanTilt": {"x": _clamp(speed, 0.0, 1.0), "y": _clamp(speed, 0.0, 1.0)}}
         self.ptz_service.AbsoluteMove(request)
+        # absolute_move's arrival is never signaled by a stop() call -- the
+        # autonomy loop polls get_ptz_status() every 0.4s while the move is
+        # in flight, and that poll is what eventually calls
+        # _mark_camera_stopped() below when MoveStatus stops reporting
+        # "MOVING". Known limitation: if a caller issues an absolute_move and
+        # then never polls status or calls stop(), suppression persists until
+        # the next PTZ command. Acceptable because the autonomy loop always
+        # polls during absolute moves and every code path that stops
+        # scanning calls stop().
+        self._mark_camera_moving()
 
     def get_ptz_status(self) -> dict:
         profile = self.get_channel_profile()
         status = self.ptz_service.GetStatus(profile.token)
         pan_tilt = status.Position.PanTilt
         move_status = status.MoveStatus.PanTilt if status.MoveStatus else None
+        moving = move_status == "MOVING"
+        # This poll doubles as the arrival oracle for absolute_move (whose
+        # completion isn't otherwise signaled) at zero extra SOAP cost.
+        if moving:
+            self._mark_camera_moving()
+        else:
+            self._mark_camera_stopped()
         return {
             "pan": pan_tilt.x,
             "tilt": pan_tilt.y,
-            "moving": move_status == "MOVING",
+            "moving": moving,
         }
 
     def get_pan_tilt_limits(self) -> dict:
@@ -178,6 +234,12 @@ class OnvifClient:
             self.ptz_service.GotoHomePosition(request)
         except Exception as exc:
             raise RuntimeError("Camera/NVR does not support GotoHomePosition") from exc
+        # Deliberately NOT marked as camera motion: GotoHomePosition is a
+        # no-op on this hardware (see __init__), and the manual /home flow
+        # never polls status afterwards -- marking "moving" here would stick
+        # and suppress motion detection until the next PTZ command. If other
+        # hardware does move on home, the worst case is a brief false-motion
+        # reading, which is much less harmful than a dead motion signal.
 
     def continuous_focus(self, speed: float) -> None:
         self.get_channel_profile()

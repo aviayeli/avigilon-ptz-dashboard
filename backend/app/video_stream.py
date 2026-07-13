@@ -30,6 +30,14 @@ OTHER_BOX_COLOR = (0, 165, 255)  # BGR orange
 # than the ~1s detection cadence.
 MOTION_PIXEL_DIFF_THRESHOLD = 25
 MOTION_AREA_RATIO_THRESHOLD = 0.02
+# While the PTZ camera itself is panning/tilting/zooming, every pixel in the
+# frame changes, so a plain frame-diff reads as continuous "motion" -- this
+# poisons everything built on the motion signal (scan-speed modulation,
+# waypoint heat). Suppress motion for this long after the camera stops
+# moving: it covers both the camera's own mechanical settle time and RTSP
+# pipeline latency (frames arriving now were captured slightly in the past,
+# so they can still show blur/movement from the tail end of the move).
+MOTION_SETTLE_AFTER_MOVE_SECONDS = 0.75
 
 
 @dataclass
@@ -103,6 +111,17 @@ def _update_motion(frame: np.ndarray) -> None:
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+    # Frame-diff motion is meaningless while the camera itself is moving --
+    # a PTZ pan/tilt/zoom changes every pixel, which would otherwise read as
+    # motion active almost continuously during autonomous scans. Still reset
+    # the baseline to the current frame so the first comparison after resume
+    # is against a frame captured post-move, not across the move.
+    if not get_onvif_client().is_camera_motion_settled(MOTION_SETTLE_AFTER_MOVE_SECONDS):
+        _previous_gray_frame = gray
+        with _motion_lock:
+            _latest_motion = {"active": False, "confidence": 0.0}
+        return
 
     if _previous_gray_frame is None or _previous_gray_frame.shape != gray.shape:
         _previous_gray_frame = gray
