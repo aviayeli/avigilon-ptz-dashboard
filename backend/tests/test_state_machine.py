@@ -77,10 +77,18 @@ class FakeOnvif:
         self.lock = threading.Lock()
         self.calls = []
         self.moving = False
+        # method name -> how many upcoming calls raise (SOAP fault injection)
+        self.fail_next = {}
 
     def _rec(self, *call):
+        # Records the attempt first, then raises if a failure is queued --
+        # so calls_of() counts attempts, letting scenarios assert retries.
         with self.lock:
             self.calls.append(call)
+            remaining = self.fail_next.get(call[0], 0)
+            if remaining > 0:
+                self.fail_next[call[0]] = remaining - 1
+                raise RuntimeError(f"injected {call[0]} failure")
 
     def continuous_move(self, pan, tilt, zoom):
         self._rec("continuous_move", pan, tilt, zoom)
@@ -280,6 +288,31 @@ check("motion stare times out back to SEARCHING",
       wait_for(lambda: ctl3.mode == Mode.SEARCHING, autonomy.MOTION_STARE_SECONDS + 3, "stare timeout"))
 t3.join(timeout=1)
 ctl3.stop()
+
+# --- scenario 9: one transient PTZ SOAP failure is retried, scan survives ---
+shared.publish([])
+motion["active"] = False
+fake_onvif.clear()
+fake_onvif.moving = False
+fake_onvif.fail_next["absolute_move"] = 1
+ctl4 = autonomy.AutonomyController()
+ctl4.start(-0.5, 0.5, -0.2, 0.2)
+check("transient move failure is retried (two attempts recorded)",
+      wait_for(lambda: len(fake_onvif.calls_of("absolute_move")) >= 2, 3, "retry attempt"))
+check("scan still SEARCHING after transient failure", ctl4.mode == Mode.SEARCHING)
+ctl4.stop()
+
+# --- scenario 10: persistent PTZ failure -> fail-safe: loop lands in IDLE ---
+fake_onvif.clear()
+events.clear()
+fake_onvif.fail_next["absolute_move"] = 2  # first attempt AND its retry fail
+ctl5 = autonomy.AutonomyController()
+ctl5.start(-0.5, 0.5, -0.2, 0.2)
+check("persistent PTZ failure lands fail-safe in IDLE",
+      wait_for(lambda: ctl5.mode == Mode.IDLE, 3, "fail-safe IDLE"))
+check("loop_error event logged on persistent failure", "loop_error" in events)
+check("failsafe camera stop attempted", bool(fake_onvif.calls_of("stop")))
+ctl5.stop()
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed", flush=True)
 sys.exit(1 if FAIL else 0)

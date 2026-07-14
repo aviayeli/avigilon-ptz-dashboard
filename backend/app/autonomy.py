@@ -170,6 +170,21 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def _ptz_with_retry(description: str, call, *args, **kwargs) -> None:
+    # Fault boundary between control decisions and the SOAP transport: one
+    # transient failure (bounded by the ONVIF client's operation timeout) is
+    # retried immediately -- a single hiccup must not kill a live tracking
+    # session. A second consecutive failure propagates to the loop's
+    # fail-safe path (stop camera, land in IDLE). Deliberately no sleep
+    # between attempts: stop() responsiveness outranks retry politeness.
+    try:
+        call(*args, **kwargs)
+        return
+    except Exception as exc:
+        print(f"[AUTONOMY] {description} failed, retrying once: {exc}", flush=True)
+    call(*args, **kwargs)
+
+
 def _build_raster_waypoints(
     pan_min: float, pan_max: float, tilt_min: float, tilt_max: float, rows: int = RASTER_ROWS
 ) -> list[tuple[float, float]]:
@@ -341,8 +356,12 @@ class AutonomyController:
     def _safe_stop_camera(self) -> None:
         try:
             get_onvif_client().stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Swallowed on purpose (this is the stop-of-last-resort on every
+            # exit path, and raising here would mask the original error) but
+            # never silent: if even the failsafe stop failed, this is the
+            # most important line in the session log.
+            print(f"[AUTONOMY] FAILSAFE camera stop failed: {exc}", flush=True)
 
     def _begin_zoom_restore(self, onvif, zoom_balance_seconds: float, now: float) -> Optional[float]:
         # Absolute zoom restore isn't possible (AbsoluteMove zoom is
@@ -355,7 +374,7 @@ class AutonomyController:
         seconds = _clamp(zoom_balance_seconds, 0.0, ZOOM_RESTORE_MAX_SECONDS)
         if seconds <= 0:
             return None
-        onvif.continuous_move(0, 0, -ZOOM_PULSE_SPEED)
+        _ptz_with_retry("zoom restore", onvif.continuous_move, 0, 0, -ZOOM_PULSE_SPEED)
         return now + seconds
 
     def _run_loop(self) -> None:
@@ -413,7 +432,7 @@ class AutonomyController:
                         # Undoing zoom left over from an investigation or a
                         # lost track before resuming waypoint coverage.
                         if now >= zoom_restore_ends_at:
-                            onvif.stop()
+                            _ptz_with_retry("zoom restore stop", onvif.stop)
                             zoom_restore_ends_at = None
                     else:
                         candidate = (
@@ -432,7 +451,7 @@ class AutonomyController:
                             waypoint_heat[waypoint_index] = min(
                                 HEAT_MAX, waypoint_heat[waypoint_index] + HEAT_INCREMENT
                             )
-                            onvif.stop()
+                            _ptz_with_retry("investigation stop", onvif.stop)
                             move_issued = False
                             self._set_last_detection(candidate)
                             investigation = _Investigation(
@@ -460,7 +479,9 @@ class AutonomyController:
                                     f"pan={pan:.2f} tilt={tilt:.2f} speed={speed:.2f}",
                                     flush=True,
                                 )
-                                onvif.absolute_move(pan, tilt, speed=speed)
+                                _ptz_with_retry(
+                                    "waypoint move", onvif.absolute_move, pan, tilt, speed=speed
+                                )
                                 move_issued = True
                                 move_started_at = now
                                 last_status_poll_at = now
@@ -503,7 +524,7 @@ class AutonomyController:
                         # A zoom pulse is in flight; end it on schedule. No
                         # blocking sleep, so stop() takes effect within a tick.
                         if now >= inv.pulse_ends_at:
-                            onvif.stop()
+                            _ptz_with_retry("zoom pulse stop", onvif.stop)
                             inv.zoom_balance_seconds += inv.pulse_direction * ZOOM_PULSE_SECONDS
                             inv.pulse_ends_at = None
                             inv.wait_started_at = now
@@ -588,7 +609,10 @@ class AutonomyController:
                                     f"confidence={top.confidence:.2f}, box_ratio={box_ratio:.3f})",
                                     flush=True,
                                 )
-                                onvif.continuous_move(0, 0, direction * ZOOM_PULSE_SPEED)
+                                _ptz_with_retry(
+                                    "zoom pulse",
+                                    onvif.continuous_move, 0, 0, direction * ZOOM_PULSE_SPEED,
+                                )
                                 inv.pulse_direction = direction
                                 inv.pulse_ends_at = now + ZOOM_PULSE_SECONDS
 
@@ -634,7 +658,7 @@ class AutonomyController:
                             pan, tilt, zoom = _compute_track_velocities(top, frame_shape)
                             if pan == 0.0 and tilt == 0.0 and zoom == 0.0:
                                 if correction_ends_at is not None:
-                                    onvif.stop()
+                                    _ptz_with_retry("deadband stop", onvif.stop)
                                     book_correction_zoom(now)
                                     correction_ends_at = None
                                     correction_zoom_direction = 0.0
@@ -643,7 +667,9 @@ class AutonomyController:
                                     # Replacing a correction still in flight:
                                     # book its zoom time first.
                                     book_correction_zoom(now)
-                                onvif.continuous_move(pan, tilt, zoom)
+                                _ptz_with_retry(
+                                    "tracking correction", onvif.continuous_move, pan, tilt, zoom
+                                )
                                 correction_started_at = now
                                 correction_zoom_direction = (
                                     0.0 if zoom == 0.0 else (1.0 if zoom > 0 else -1.0)
@@ -656,7 +682,7 @@ class AutonomyController:
                                 correction_ends_at = now + TRACK_CORRECTION_MAX_SECONDS
 
                     if correction_ends_at is not None and now >= correction_ends_at:
-                        onvif.stop()
+                        _ptz_with_retry("correction stop", onvif.stop)
                         book_correction_zoom(now)
                         correction_ends_at = None
                         correction_zoom_direction = 0.0
@@ -667,7 +693,7 @@ class AutonomyController:
                             f"{now - last_detection_at:.2f}s (timeout={LOST_TARGET_TIMEOUT_SECONDS}s)",
                             flush=True,
                         )
-                        onvif.stop()
+                        _ptz_with_retry("target-lost stop", onvif.stop)
                         if correction_ends_at is not None:
                             book_correction_zoom(now)
                             correction_ends_at = None
