@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 # Must run before anything else prints: wraps stdout/stderr so the whole
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.autonomy import get_autonomy_controller
+from app.onvif_client import get_onvif_client
 from app.routers import autonomy, config, detection, events, ptz, stream, system
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -27,6 +29,24 @@ app.include_router(stream.router)
 app.include_router(system.router)
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
+
+
+@app.on_event("startup")
+def discover_ptz_capabilities_on_boot():
+    # Read-only ONVIF discovery (position spaces, limits, home support),
+    # logged into the session log so hardware sessions capture what this
+    # NVR/camera stack actually reports. Runs on a background thread and
+    # never blocks or fails boot: the server must still come up (degraded)
+    # with no NVR configured or reachable.
+    def _discover():
+        try:
+            get_onvif_client().get_ptz_capabilities()
+        except Exception as exc:
+            print(f"[ONVIF] boot capability discovery skipped: {exc}", flush=True)
+
+    threading.Thread(
+        target=_discover, daemon=True, name="ptz-capability-discovery"
+    ).start()
 
 
 @app.on_event("shutdown")

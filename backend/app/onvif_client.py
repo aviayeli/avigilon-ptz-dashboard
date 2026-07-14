@@ -15,9 +15,77 @@ AUX_COMMANDS = {
     "ir_off": "tt:IRLamp|Off",
 }
 
+# Standard ONVIF PTZ position-space URIs. The generic space is normalized
+# -1..1 by definition; a degrees space, when the camera offers one, is the
+# only trustworthy source for real angles (exact degree <-> normalized
+# correspondence). Which of these this NVR actually proxies is unknown until
+# discovery runs against the hardware -- that's what the boot-time logging
+# is for.
+GENERIC_PAN_TILT_POSITION_SPACE = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
+)
+DEGREES_PAN_TILT_POSITION_SPACE = (
+    "http://www.onvif.org/ver10/tptz/PanTiltSpaces/SphericalPositionSpaceDegrees"
+)
+GENERIC_ZOOM_POSITION_SPACE = (
+    "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
+)
+
 
 def _clamp(value: float, low: float = -1.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
+
+
+def _describe_space(space) -> dict:
+    # Flattens a zeep Space1D/2DDescription into plain floats; zoom spaces
+    # have no YRange, and a lenient NVR proxy may omit fields entirely.
+    def _bounds(axis_range):
+        if axis_range is None:
+            return None, None
+        return getattr(axis_range, "Min", None), getattr(axis_range, "Max", None)
+
+    x_min, x_max = _bounds(getattr(space, "XRange", None))
+    y_min, y_max = _bounds(getattr(space, "YRange", None))
+    return {
+        "uri": getattr(space, "URI", None),
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+    }
+
+
+def _tighten_limits(limits: dict, pan_min, pan_max, tilt_min, tilt_max) -> None:
+    # Intersects limits in place, ignoring axes the source didn't report.
+    if pan_min is not None:
+        limits["pan_min"] = max(limits["pan_min"], pan_min)
+    if pan_max is not None:
+        limits["pan_max"] = min(limits["pan_max"], pan_max)
+    if tilt_min is not None:
+        limits["tilt_min"] = max(limits["tilt_min"], tilt_min)
+    if tilt_max is not None:
+        limits["tilt_max"] = min(limits["tilt_max"], tilt_max)
+
+
+def _log_capabilities(capabilities: dict) -> None:
+    for kind, spaces in (
+        ("pan/tilt", capabilities["pan_tilt_spaces"]),
+        ("zoom", capabilities["zoom_spaces"]),
+    ):
+        if not spaces:
+            print(f"[ONVIF] no absolute {kind} position space reported", flush=True)
+        for space in spaces:
+            print(
+                f"[ONVIF] absolute {kind} space {space['uri']}: "
+                f"x=[{space['x_min']}, {space['x_max']}] "
+                f"y=[{space['y_min']}, {space['y_max']}]",
+                flush=True,
+            )
+    print(
+        f"[ONVIF] home_supported={capabilities['home_supported']} "
+        f"fixed_home_position={capabilities['fixed_home_position']}",
+        flush=True,
+    )
 
 
 class OnvifClient:
@@ -200,20 +268,98 @@ class OnvifClient:
             "moving": moving,
         }
 
-    def get_pan_tilt_limits(self) -> dict:
-        # Falls back to the full normalized range if the camera doesn't
-        # report configured mechanical limits for some reason.
-        profile = self.get_channel_profile()
-        limits = getattr(profile.PTZConfiguration, "PanTiltLimits", None)
-        if limits is None or limits.Range is None:
-            return {"pan_min": -1.0, "pan_max": 1.0, "tilt_min": -1.0, "tilt_max": 1.0}
+    def get_ptz_capabilities(self) -> dict:
+        """Discover what the PTZ stack actually reports about this camera:
+        the absolute position spaces (and their ranges) from
+        GetConfigurationOptions, plus home-position support from GetNode.
 
-        return {
-            "pan_min": limits.Range.XRange.Min,
-            "pan_max": limits.Range.XRange.Max,
-            "tilt_min": limits.Range.YRange.Min,
-            "tilt_max": limits.Range.YRange.Max,
+        Cached after the first successful GetConfigurationOptions round-trip.
+        Raises if that call itself is unreachable (no NVR / no config);
+        node-level failure degrades to None fields, because NVR proxies often
+        implement only a subset of the PTZ service.
+        """
+        if self._ptz_capabilities is not None:
+            return self._ptz_capabilities
+
+        profile = self.get_channel_profile()
+        request = self.ptz_service.create_type("GetConfigurationOptions")
+        request.ConfigurationToken = profile.PTZConfiguration.token
+        options = self.ptz_service.GetConfigurationOptions(request)
+
+        spaces = getattr(options, "Spaces", None)
+        pan_tilt_spaces = [
+            _describe_space(space)
+            for space in (getattr(spaces, "AbsolutePanTiltPositionSpace", None) or [])
+        ]
+        zoom_spaces = [
+            _describe_space(space)
+            for space in (getattr(spaces, "AbsoluteZoomPositionSpace", None) or [])
+        ]
+
+        home_supported = None
+        fixed_home_position = None
+        node_token = getattr(profile.PTZConfiguration, "NodeToken", None)
+        if node_token:
+            try:
+                node = self.ptz_service.GetNode(node_token)
+                home_supported = getattr(node, "HomeSupported", None)
+                fixed_home_position = getattr(node, "FixedHomePosition", None)
+            except Exception as exc:
+                print(f"[ONVIF] GetNode failed (NVR may not proxy it): {exc}", flush=True)
+
+        capabilities = {
+            "pan_tilt_spaces": pan_tilt_spaces,
+            "zoom_spaces": zoom_spaces,
+            "home_supported": home_supported,
+            "fixed_home_position": fixed_home_position,
         }
+        self._ptz_capabilities = capabilities
+        _log_capabilities(capabilities)
+        return capabilities
+
+    def get_pan_tilt_limits(self) -> dict:
+        # Effective limits = the generic position space's advertised range
+        # (the physical envelope, from GetConfigurationOptions) intersected
+        # with the administratively configured PanTiltLimits, using whichever
+        # of the two this stack reports. Falls back to the full normalized
+        # range when neither is available.
+        profile = self.get_channel_profile()
+        limits = {"pan_min": -1.0, "pan_max": 1.0, "tilt_min": -1.0, "tilt_max": 1.0}
+
+        try:
+            capabilities = self.get_ptz_capabilities()
+        except Exception as exc:
+            print(
+                f"[ONVIF] capability discovery unavailable, "
+                f"using configured limits only: {exc}",
+                flush=True,
+            )
+            capabilities = None
+        if capabilities is not None:
+            generic = next(
+                (
+                    space
+                    for space in capabilities["pan_tilt_spaces"]
+                    if space["uri"] == GENERIC_PAN_TILT_POSITION_SPACE
+                ),
+                None,
+            )
+            if generic is not None:
+                _tighten_limits(
+                    limits,
+                    generic["x_min"], generic["x_max"],
+                    generic["y_min"], generic["y_max"],
+                )
+
+        configured = getattr(profile.PTZConfiguration, "PanTiltLimits", None)
+        if configured is not None and configured.Range is not None:
+            _tighten_limits(
+                limits,
+                configured.Range.XRange.Min, configured.Range.XRange.Max,
+                configured.Range.YRange.Min, configured.Range.YRange.Max,
+            )
+
+        return limits
 
     def set_center_here(self) -> dict:
         # Saves the camera's current live position as the (0, 0) reference
