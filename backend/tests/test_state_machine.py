@@ -223,6 +223,15 @@ check("investigation gives up after attempt budget -> SEARCHING",
       wait_for(lambda: ctl.mode == Mode.SEARCHING, 15, "give up"))
 zoom_out_after = any(c[3] < 0 for c in fake_onvif.calls_of("continuous_move"))
 check("zoom restore (zoom-out) issued after failed investigation", zoom_out_after)
+
+# --- scenario 5b: failed-investigation cooldown -- the still-visible
+# unconfirmable candidate must NOT re-trigger investigation, and waypoint
+# coverage must resume (the publisher keeps the candidate in view) ---
+fake_onvif.clear()
+reinvestigated = wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "re-investigation (should NOT happen)")
+check("failed-investigation cooldown suppresses immediate re-trigger", not reinvestigated)
+check("scan resumes waypoint coverage during cooldown",
+      bool(fake_onvif.calls_of("absolute_move")))
 publisher_stop.set()
 t.join()
 

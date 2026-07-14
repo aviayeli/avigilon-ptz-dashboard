@@ -261,7 +261,17 @@ class VideoStreamManager:
             try:
                 detections = get_drone_detector().detect(frame)
                 if is_drone_verification_enabled():
-                    detections = filter_false_positive_drones(frame, detections)
+                    # camera_settled gates the filter's rejection memory:
+                    # remembered pixel regions are only valid while the
+                    # camera holds still (same signal that gates frame-diff
+                    # motion above).
+                    detections = filter_false_positive_drones(
+                        frame,
+                        detections,
+                        camera_settled=get_onvif_client().is_camera_motion_settled(
+                            MOTION_SETTLE_AFTER_MOVE_SECONDS
+                        ),
+                    )
             except Exception as exc:
                 print(f"[VIDEO] detection failed: {exc}", flush=True)
                 detections = []

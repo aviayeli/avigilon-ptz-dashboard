@@ -47,6 +47,13 @@ MAX_ZOOM_ATTEMPTS = 4  # total pulses, either direction, per investigation
 # Ignore drone candidates below this confidence as scan triggers -- without a
 # floor, 1%-confidence noise constantly interrupts waypoint coverage.
 INVESTIGATE_MIN_CONFIDENCE = 0.15
+# After an investigation exhausts its zoom budget without confirming, the
+# unconfirmable candidate is usually still in view -- without a cooldown the
+# scan re-investigates it back-to-back forever and the raster never advances
+# (observed live: minutes frozen on one false positive). Candidate triggers
+# are suppressed for this long; motion triggers stay live so a genuinely
+# arriving drone still interrupts the scan immediately.
+INVESTIGATE_FAIL_COOLDOWN_SECONDS = 8.0
 # Evidence freshness: only detection results computed from frames captured
 # this long AFTER the camera finished its last adjustment count -- earlier
 # results may describe the pre-adjustment view (inference runs at ~1Hz while
@@ -365,6 +372,7 @@ class AutonomyController:
 
         investigation: Optional[_Investigation] = None
         zoom_restore_ends_at: Optional[float] = None
+        candidate_suppressed_until = 0.0
 
         last_detection_at = time.monotonic()
         last_consumed_seq = -1
@@ -410,7 +418,7 @@ class AutonomyController:
                     else:
                         candidate = (
                             _largest_drone_detection(result.detections, INVESTIGATE_MIN_CONFIDENCE)
-                            if result is not None
+                            if result is not None and now >= candidate_suppressed_until
                             else None
                         )
                         # Motion is suppressed while the camera itself moves
@@ -591,6 +599,10 @@ class AutonomyController:
                                 f"zoom_attempts={inv.zoom_attempts}",
                                 flush=True,
                             )
+                            if end_reason == "attempt budget exhausted":
+                                candidate_suppressed_until = (
+                                    now + INVESTIGATE_FAIL_COOLDOWN_SECONDS
+                                )
                             zoom_restore_ends_at = self._begin_zoom_restore(
                                 onvif, inv.zoom_balance_seconds, now
                             )
