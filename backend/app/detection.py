@@ -23,6 +23,29 @@ MODEL_PATH = Path(__file__).resolve().parent.parent / "best_merged.pt"
 # heuristic, not a guarantee -- COCO has no "drone"/aircraft class either, so
 # it can only rule things out, never positively confirm a drone.
 GENERAL_MODEL_NAME = "yolov8n.pt"
+# Absolute path (backend/yolov8n.pt, alongside best_merged.pt): resolving
+# the bare model name would depend on the process CWD and, when the file is
+# missing, trigger an Ultralytics auto-download -- impossible on the
+# isolated deployment network. assert_model_weights_present() (called at
+# boot) guarantees the file exists before any detector is constructed.
+GENERAL_MODEL_PATH = MODEL_PATH.parent / GENERAL_MODEL_NAME
+
+
+def assert_model_weights_present() -> None:
+    # Boot-time guard: target networks are isolated, so a missing weights
+    # file can never be downloaded at runtime. Without this check the
+    # failure mode is a detection exception every second, each swallowed
+    # into "no detections" -- a drone-detection system silently not
+    # detecting. Refusing to boot with an actionable message is strictly
+    # better.
+    missing = [str(p) for p in (MODEL_PATH, GENERAL_MODEL_PATH) if not p.is_file()]
+    if missing:
+        raise RuntimeError(
+            "missing YOLO model weights: "
+            + ", ".join(missing)
+            + " -- copy the file(s) into backend/ before starting; this "
+            "deployment is offline and cannot auto-download them"
+        )
 # Labels that, when confidently detected overlapping a drone candidate,
 # contradict it. Covers indoor objects AND the outdoor yard this system
 # actually watches (cars, trucks, people -- observed live: the custom model
@@ -133,9 +156,7 @@ def get_drone_detector() -> DroneDetector:
 
 @lru_cache
 def get_general_detector() -> DroneDetector:
-    # Passing a bare model name (not a local path) makes Ultralytics
-    # auto-download the pretrained COCO weights on first use.
-    return DroneDetector(Path(GENERAL_MODEL_NAME))
+    return DroneDetector(GENERAL_MODEL_PATH)
 
 
 def _iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:

@@ -13,8 +13,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.autonomy import get_autonomy_controller
+from app.detection import assert_model_weights_present
 from app.onvif_client import get_onvif_client
 from app.routers import autonomy, config, detection, events, ptz, stream, system
+
+# Refuse to boot without both YOLO weights files: the deployment network is
+# isolated (no auto-download possible), and the alternative failure mode is
+# a per-second detection exception silently swallowed into "no detections".
+# Runs after init_session_log() so the message also lands in the session log.
+assert_model_weights_present()
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 
