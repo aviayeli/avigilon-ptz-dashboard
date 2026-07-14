@@ -4,63 +4,78 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>לוח בקרה - Avigilon PTZ</title>
-  <link rel="stylesheet" href="/static/css/theme.css">
+  <!-- No external font links: target networks are isolated (offline).
+       The CSS font stack falls back to Segoe UI / Consolas. -->
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body class="theme-dark dashboard-page">
+
+  <!-- ===== Top bar ===== -->
   <header class="topbar">
-    <div class="topbar-brand">לוח בקרה - Avigilon PTZ</div>
+    <div class="topbar-brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">לוח בקרה <b>Avigilon PTZ</b></span>
+      <span class="brand-sub">זיהוי רחפנים</span>
+    </div>
     <div id="connection-status" class="status-pill">
       <span class="status-dot"></span>
       <span class="status-text">בודק...</span>
     </div>
-    <button id="config-open-btn" class="btn btn-secondary" type="button" aria-label="הגדרות חיבור">&#9881;</button>
+    <button id="config-open-btn" class="btn btn-ghost icon-btn" type="button" aria-label="הגדרות חיבור">&#9881;</button>
   </header>
 
+  <!-- ===== Config modal (unchanged IDs) ===== -->
   <div id="config-modal" class="modal-backdrop" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="config-modal-title">
       <h2 id="config-modal-title" class="modal-title">הגדרות חיבור למצלמה/NVR</h2>
-      <div class="modal-field">
-        <label for="config-nvr-ip">כתובת NVR</label>
-        <input type="text" id="config-nvr-ip">
-      </div>
-      <div class="modal-field">
-        <label for="config-nvr-port">פורט RTSP</label>
-        <input type="number" id="config-nvr-port" min="1" max="65535">
-      </div>
-      <div class="modal-field">
-        <label for="config-onvif-port">פורט ONVIF</label>
-        <input type="number" id="config-onvif-port" min="1" max="65535">
-      </div>
-      <div class="modal-field">
-        <label for="config-username">שם משתמש</label>
-        <input type="text" id="config-username">
-      </div>
-      <div class="modal-field">
-        <label for="config-password">סיסמה</label>
-        <input type="password" id="config-password" placeholder="(ללא שינוי)">
-      </div>
-      <div class="modal-field">
-        <label for="config-channel">ערוץ מצלמה</label>
-        <input type="number" id="config-channel" min="0">
+      <div class="modal-grid">
+        <div class="modal-field modal-field-wide">
+          <label for="config-nvr-ip">כתובת NVR</label>
+          <input type="text" id="config-nvr-ip">
+        </div>
+        <div class="modal-field">
+          <label for="config-nvr-port">פורט RTSP</label>
+          <input type="number" id="config-nvr-port" min="1" max="65535">
+        </div>
+        <div class="modal-field">
+          <label for="config-onvif-port">פורט ONVIF</label>
+          <input type="number" id="config-onvif-port" min="1" max="65535">
+        </div>
+        <div class="modal-field">
+          <label for="config-username">שם משתמש</label>
+          <input type="text" id="config-username">
+        </div>
+        <div class="modal-field">
+          <label for="config-password">סיסמה</label>
+          <input type="password" id="config-password" placeholder="(ללא שינוי)">
+        </div>
+        <div class="modal-field">
+          <label for="config-channel">ערוץ מצלמה</label>
+          <input type="number" id="config-channel" min="0">
+        </div>
       </div>
       <div id="config-status" class="modal-status"></div>
       <p class="modal-note">שמירה דורשת הפעלה מחדש של השרת כדי להיכנס לתוקף.</p>
       <div class="modal-actions">
+        <button id="config-close-btn" class="btn btn-ghost" type="button">סגור</button>
         <button id="config-test-btn" class="btn btn-secondary" type="button">בדוק חיבור</button>
         <button id="config-save-btn" class="btn btn-primary" type="button">שמור</button>
-        <button id="config-close-btn" class="btn btn-secondary" type="button">סגור</button>
       </div>
     </div>
   </div>
 
+  <!-- ===== Main stage: video + event log ===== -->
   <main class="dashboard-grid">
     <section class="video-panel">
       <img id="video-stream" alt="שידור חי מהמצלמה">
+      <div class="video-frame" aria-hidden="true">
+        <i class="corner c-tl"></i><i class="corner c-tr"></i><i class="corner c-bl"></i><i class="corner c-br"></i>
+      </div>
       <div id="video-overlay" class="video-status" hidden>מתחבר מחדש לשידור...</div>
       <div id="alarm-banner" class="alarm-banner" hidden>
+        <span class="alarm-icon" aria-hidden="true">&#9650;</span>
         <span>זוהה רחפן</span>
-        <button id="alarm-dismiss-btn" class="btn btn-secondary alarm-dismiss-btn" type="button">השתק התרעה</button>
+        <button id="alarm-dismiss-btn" class="btn alarm-dismiss-btn" type="button">השתק התרעה</button>
       </div>
       <div class="detection-badges">
         <div id="motion-badge" class="detection-badge">
@@ -72,35 +87,80 @@
           <span class="detection-badge-label">אין רחפן</span>
         </div>
       </div>
+      <div class="video-stats-strip">
+        <div class="vstat"><span class="info-label">ערוץ</span><span class="info-value" id="info-channel">-</span></div>
+        <div class="vstat"><span class="info-label">NVR</span><span class="info-value" id="info-nvr">-</span></div>
+        <div class="vstat"><span class="info-label">קצב פריימים</span><span class="info-value" id="info-fps">-</span></div>
+        <div class="vstat"><span class="info-label">זמן זיהוי</span><span class="info-value" id="info-inference">-</span></div>
+      </div>
     </section>
+
     <aside class="info-panel">
-      <div class="stat-card stat-card-grid">
-        <div class="info-row">
-          <span class="info-label">ערוץ</span>
-          <span class="info-value" id="info-channel">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">NVR</span>
-          <span class="info-value" id="info-nvr">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">קצב פריימים</span>
-          <span class="info-value" id="info-fps">-</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">זמן זיהוי</span>
-          <span class="info-value" id="info-inference">-</span>
+      <div class="panel-title-row">
+        <span class="card-title">יומן אירועים</span>
+        <span class="panel-title-rule" aria-hidden="true"></span>
+      </div>
+      <ul id="event-log-list" class="event-log-list">
+        <li class="event-log-empty">אין אירועים עדיין</li>
+      </ul>
+    </aside>
+  </main>
+
+  <!-- ===== Command center ===== -->
+  <footer class="command-bar">
+    <nav id="ptz-controls" class="ptz-safe-zone" dir="ltr">
+      <div class="ctl-group">
+        <span class="ctl-group-label" dir="rtl">פאן / הטיה</span>
+        <div class="ptz-dpad">
+          <button id="ptz-up-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="1">&#8598;</button>
+          <button id="ptz-up" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="1">&#8593;</button>
+          <button id="ptz-up-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="1">&#8599;</button>
+          <button id="ptz-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="0">&#8592;</button>
+          <button id="ptz-home" class="btn btn-secondary ptz-btn ptz-home-btn">מרכוז</button>
+          <button id="ptz-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="0">&#8594;</button>
+          <button id="ptz-down-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="-1">&#8601;</button>
+          <button id="ptz-down" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="-1">&#8595;</button>
+          <button id="ptz-down-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="-1">&#8600;</button>
         </div>
       </div>
-
-      <div class="stat-card autonomy-card">
-        <div class="card-header-row">
-          <div class="info-row">
-            <span class="info-label">מצב אוטונומי</span>
-            <span class="info-value" id="autonomy-status">במנוחה</span>
-          </div>
-          <button id="range-info-toggle" class="btn btn-secondary info-icon-btn" type="button" aria-expanded="false" aria-label="מידע על טווח זיהוי">&#8505;</button>
+      <div class="ctl-group">
+        <span class="ctl-group-label" dir="rtl">זום</span>
+        <div class="ptz-zoom">
+          <button id="zoom-in" class="btn btn-primary ptz-btn zoom-btn" data-zoom="1">+</button>
+          <button id="zoom-out" class="btn btn-primary ptz-btn zoom-btn" data-zoom="-1">&#8722;</button>
         </div>
+      </div>
+      <div class="ctl-group ctl-group-utils" dir="rtl">
+        <span class="ctl-group-label">עזרים</span>
+        <div class="util-grid">
+          <div class="ptz-focus util-row">
+            <button id="focus-near" class="btn btn-secondary ptz-btn" data-focus-speed="-1">פוקוס קרוב</button>
+            <button id="focus-auto" class="btn btn-secondary ptz-btn">פוקוס אוטו'</button>
+            <button id="focus-far" class="btn btn-secondary ptz-btn" data-focus-speed="1">פוקוס רחוק</button>
+          </div>
+          <div class="ptz-iris util-row">
+            <button id="iris-close" class="btn btn-secondary ptz-btn" data-iris-speed="-1">צמצם &#8722;</button>
+            <button id="iris-open" class="btn btn-secondary ptz-btn" data-iris-speed="1">צמצם +</button>
+          </div>
+          <div class="ptz-aux util-row">
+            <button class="btn btn-secondary aux-btn" data-aux="wiper_on">מגב &#10003;</button>
+            <button class="btn btn-secondary aux-btn" data-aux="wiper_off">מגב &#10005;</button>
+            <button class="btn btn-secondary aux-btn" data-aux="ir_on">IR &#10003;</button>
+            <button class="btn btn-secondary aux-btn" data-aux="ir_off">IR &#10005;</button>
+          </div>
+        </div>
+        <div id="ptz-override-hint" class="ptz-override-hint" hidden>שליטה ידנית עוצרת את הסריקה האוטונומית</div>
+      </div>
+    </nav>
+
+    <section class="autonomy-panel">
+      <div class="card-header-row">
+        <span class="ctl-group-label">סריקה אוטונומית</span>
+        <div class="autonomy-status-pill">
+          <span class="info-label">מצב</span>
+          <span class="info-value" id="autonomy-status">במנוחה</span>
+        </div>
+        <button id="range-info-toggle" class="btn btn-ghost info-icon-btn" type="button" aria-expanded="false" aria-label="מידע על טווח זיהוי">&#8505;</button>
         <div id="range-info-panel" class="collapsible-panel info-popover" hidden>
           <p>
             המערכת מזהה עצמים באמצעות מצלמה בודדת, ללא כיול מרחק וללא חיישן טווח (לייזר/רדאר).
@@ -116,6 +176,8 @@
             <strong>לסיכום:</strong> יש להתייחס להערכת המרחק כאינדיקציה כללית בלבד, ולא כמדידה מדעית מדויקת.
           </p>
         </div>
+      </div>
+      <div class="autonomy-body">
         <div class="search-range">
           <div class="search-range-row">
             <label for="range-pan-min">פאן</label>
@@ -133,10 +195,7 @@
               <input type="number" id="range-tilt-max" min="-100" max="100" step="1">
             </span>
           </div>
-        </div>
-        <div class="center-control">
-          <button id="set-center-btn" class="btn btn-secondary" type="button">&#127919; הגדר מיקום נוכחי כמרכז (0,0)</button>
-          <p class="center-hint">כוונו את המצלמה למיקום הרצוי ולחצו כאן - הטווחים למעלה יימדדו מאותה נקודה.</p>
+          <button id="set-center-btn" class="btn btn-ghost set-center-btn" type="button" title="כוונו את המצלמה למיקום הרצוי ולחצו כאן - הטווחים יימדדו מאותה נקודה">&#127919; הגדר מיקום נוכחי כמרכז (0,0)</button>
         </div>
         <div class="sensitivity-control">
           <label for="sensitivity-slider">רגישות זיהוי רחפן</label>
@@ -145,51 +204,12 @@
             <span id="sensitivity-value">50%</span>
           </div>
         </div>
-        <button id="autonomy-toggle" class="btn btn-primary">התחל סריקה</button>
+        <div class="autonomy-actions">
+          <button id="autonomy-toggle" class="btn btn-primary big-action">התחל סריקה</button>
+        </div>
       </div>
-
-      <div class="stat-card event-log-card">
-        <div class="card-title">יומן אירועים</div>
-        <ul id="event-log-list" class="event-log-list">
-          <li class="event-log-empty">אין אירועים עדיין</li>
-        </ul>
-      </div>
-    </aside>
-  </main>
-
-  <nav id="ptz-controls" class="ptz-safe-zone" dir="ltr">
-    <div class="ptz-dpad">
-      <button id="ptz-up-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="1">&#8598;</button>
-      <button id="ptz-up" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="1">&#8593;</button>
-      <button id="ptz-up-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="1">&#8599;</button>
-      <button id="ptz-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="0">&#8592;</button>
-      <button id="ptz-home" class="btn btn-secondary ptz-btn">מרכוז</button>
-      <button id="ptz-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="0">&#8594;</button>
-      <button id="ptz-down-left" class="btn btn-primary ptz-btn" data-pan="-1" data-tilt="-1">&#8601;</button>
-      <button id="ptz-down" class="btn btn-primary ptz-btn" data-pan="0" data-tilt="-1">&#8595;</button>
-      <button id="ptz-down-right" class="btn btn-primary ptz-btn" data-pan="1" data-tilt="-1">&#8600;</button>
-    </div>
-    <div class="ptz-zoom">
-      <button id="zoom-out" class="btn btn-primary ptz-btn" data-zoom="-1">זום -</button>
-      <button id="zoom-in" class="btn btn-primary ptz-btn" data-zoom="1">זום +</button>
-    </div>
-    <div class="ptz-focus">
-      <button id="focus-near" class="btn btn-secondary ptz-btn" data-focus-speed="-1">פוקוס קרוב</button>
-      <button id="focus-auto" class="btn btn-secondary ptz-btn">פוקוס אוטומטי</button>
-      <button id="focus-far" class="btn btn-secondary ptz-btn" data-focus-speed="1">פוקוס רחוק</button>
-    </div>
-    <div class="ptz-iris">
-      <button id="iris-close" class="btn btn-secondary ptz-btn" data-iris-speed="-1">צמצם - סגור</button>
-      <button id="iris-open" class="btn btn-secondary ptz-btn" data-iris-speed="1">צמצם - פתח</button>
-    </div>
-    <div class="ptz-aux">
-      <button class="btn btn-secondary aux-btn" data-aux="wiper_on">מגב - הפעלה</button>
-      <button class="btn btn-secondary aux-btn" data-aux="wiper_off">מגב - כיבוי</button>
-      <button class="btn btn-secondary aux-btn" data-aux="ir_on">IR - הפעלה</button>
-      <button class="btn btn-secondary aux-btn" data-aux="ir_off">IR - כיבוי</button>
-    </div>
-    <div id="ptz-override-hint" class="ptz-override-hint" hidden>שליטה ידנית עוצרת את הסריקה האוטונומית</div>
-  </nav>
+    </section>
+  </footer>
 
   <script src="/static/js/app.js" defer></script>
   <script src="/static/js/config.js" defer></script>
