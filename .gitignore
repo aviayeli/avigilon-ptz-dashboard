@@ -9,6 +9,7 @@ venv/
 
 # Real captured photos of the physical camera location, not project source.
 backend/snapshots/
+backend/training_data/
 
 # Per-run server session logs (telemetry capture, see app/session_log.py).
 backend/logs/
