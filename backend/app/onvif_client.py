@@ -5,8 +5,30 @@ from typing import Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from onvif import ONVIFCamera
+from zeep.transports import Transport
 
 from app.config import settings
+
+# Bounded SOAP I/O. zeep's default operation timeout is None, so a half-open
+# TCP connection (NVR reboot, switch blip, unplugged cable) would otherwise
+# block the calling thread indefinitely -- in the worst case freezing the
+# autonomy loop mid-correction while the camera is physically moving, where
+# not even the loop's finally-block failsafe can run. Every ONVIF call must
+# fail within bounded time so control code can react.
+SOAP_OPERATION_TIMEOUT_SECONDS = 5.0
+# Document/connection establishment (WSDLs are bundled local files, so this
+# mostly bounds the initial connection handshake).
+SOAP_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+def build_bounded_transport() -> Transport:
+    # One place defines the timeout policy for every ONVIFCamera this app
+    # constructs (the singleton below AND the config panel's short-lived
+    # connection test in routers/config.py).
+    return Transport(
+        timeout=SOAP_CONNECT_TIMEOUT_SECONDS,
+        operation_timeout=SOAP_OPERATION_TIMEOUT_SECONDS,
+    )
 
 AUX_COMMANDS = {
     "wiper_on": "tt:Wiper|On",
@@ -143,6 +165,7 @@ class OnvifClient:
                 settings.ONVIF_PORT,
                 settings.NVR_USERNAME,
                 settings.NVR_PASSWORD,
+                transport=build_bounded_transport(),
             )
         return self._camera
 

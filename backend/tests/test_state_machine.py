@@ -39,6 +39,13 @@ onvif_mod = types.ModuleType("onvif")
 onvif_mod.ONVIFCamera = object
 sys.modules["onvif"] = onvif_mod
 
+zeep_mod = types.ModuleType("zeep")
+zeep_transports = types.ModuleType("zeep.transports")
+zeep_transports.Transport = lambda **kwargs: types.SimpleNamespace(**kwargs)
+zeep_mod.transports = zeep_transports
+sys.modules["zeep"] = zeep_mod
+sys.modules["zeep.transports"] = zeep_transports
+
 ps = types.ModuleType("pydantic_settings")
 
 

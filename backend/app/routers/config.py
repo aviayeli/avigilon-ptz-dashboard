@@ -121,6 +121,8 @@ def test_connection(payload: ConfigRequest):
     # attempt scoped to exactly this handler.
     from onvif import ONVIFCamera
 
+    from app.onvif_client import build_bounded_transport
+
     password = payload.nvr_password or _current_password(_read_env_file())
 
     try:
@@ -128,7 +130,15 @@ def test_connection(payload: ConfigRequest):
         # get_onvif_client() singleton -- this is a point-in-time
         # connectivity check against whatever the user just typed, and must
         # not touch or reset the real client's cached services/profile.
-        camera = ONVIFCamera(payload.nvr_ip, payload.onvif_port, payload.nvr_username, password)
+        # Bounded transport: a typo'd IP must time out, not pin a threadpool
+        # thread indefinitely.
+        camera = ONVIFCamera(
+            payload.nvr_ip,
+            payload.onvif_port,
+            payload.nvr_username,
+            password,
+            transport=build_bounded_transport(),
+        )
         camera.devicemgmt.GetSystemDateAndTime()
         profiles = camera.create_media_service().GetProfiles()
     except Exception as exc:
