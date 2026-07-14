@@ -28,13 +28,14 @@ class OnvifClient:
         self._imaging_service = None
         self._profile = None
         self._video_source_token: Optional[str] = None
-        # GotoHomePosition is a no-op on this hardware (verified: position is
-        # bit-identical before/after the call), so "center" is instead a
-        # user-defined reference point -- wherever the operator last chose to
-        # save via set_center_here(). Defaults to the ONVIF origin (0, 0)
-        # until explicitly set.
+        # "Center" is the (0, 0) reference point for operator-facing pan/tilt
+        # ranges: wherever set_center_here() last recorded. Defaults to the
+        # ONVIF origin (0, 0) until explicitly set.
         self._center_pan = 0.0
         self._center_tilt = 0.0
+        # Discovered PTZ capabilities (position spaces, home support); cached
+        # after the first successful GetConfigurationOptions round-trip.
+        self._ptz_capabilities: Optional[dict] = None
         # Camera-motion bookkeeping for the motion-detection frame-diff (see
         # video_stream.py's _update_motion): reads happen from the video
         # capture thread, writes happen from autonomy/API threads issuing PTZ
@@ -226,7 +227,33 @@ class OnvifClient:
     def get_center(self) -> dict:
         return {"pan": self._center_pan, "tilt": self._center_tilt}
 
+    def wait_until_stopped(
+        self, timeout_seconds: float = 8.0, poll_seconds: float = 0.4
+    ) -> bool:
+        # Arrival oracle for self-terminating moves issued outside the
+        # autonomy loop (GotoHomePosition): polls GetStatus -- which maintains
+        # the camera-motion bookkeeping as a side effect -- until MoveStatus
+        # stops reporting MOVING. Returns False on timeout. Shares the scan
+        # loop's known race: a poll landing before the camera starts
+        # reporting motion reads as already stopped.
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            time.sleep(poll_seconds)
+            try:
+                if not self.get_ptz_status()["moving"]:
+                    return True
+            except Exception:
+                # Status is unreadable, so the "moving" flag can never be
+                # cleared by polling; leaving it set would mute motion
+                # detection until the next PTZ command, which is worse than
+                # a brief false-motion reading.
+                self._mark_camera_stopped()
+                raise
+        return False
+
     def goto_home(self) -> None:
+        # Field-verified 2026-07-14: GotoHomePosition physically moves this
+        # camera (an earlier hardware note claiming it was a no-op is wrong).
         profile = self.get_channel_profile()
         request = self.ptz_service.create_type("GotoHomePosition")
         request.ProfileToken = profile.token
@@ -234,12 +261,13 @@ class OnvifClient:
             self.ptz_service.GotoHomePosition(request)
         except Exception as exc:
             raise RuntimeError("Camera/NVR does not support GotoHomePosition") from exc
-        # Deliberately NOT marked as camera motion: GotoHomePosition is a
-        # no-op on this hardware (see __init__), and the manual /home flow
-        # never polls status afterwards -- marking "moving" here would stick
-        # and suppress motion detection until the next PTZ command. If other
-        # hardware does move on home, the worst case is a brief false-motion
-        # reading, which is much less harmful than a dead motion signal.
+        # The camera is now sweeping to its home position. Block until it
+        # settles so (a) motion suppression covers the sweep and is released
+        # afterwards -- nothing else polls status on the manual /home path --
+        # and (b) callers can rely on the camera actually being at home when
+        # this returns.
+        self._mark_camera_moving()
+        self.wait_until_stopped()
 
     def continuous_focus(self, speed: float) -> None:
         self.get_channel_profile()

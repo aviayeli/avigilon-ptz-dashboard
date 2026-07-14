@@ -67,9 +67,7 @@ def home():
 @router.post("/center", dependencies=[Depends(take_manual_control)])
 def set_center():
     # Saves wherever the camera currently is (position it first via manual
-    # controls) as the (0, 0) reference for pan/tilt search ranges --
-    # GotoHomePosition is a no-op on this hardware, so this is the
-    # user-defined substitute.
+    # controls) as the (0, 0) reference for pan/tilt search ranges.
     try:
         center = get_onvif_client().set_center_here()
     except Exception as exc:
