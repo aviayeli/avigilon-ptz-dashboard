@@ -20,6 +20,13 @@ from app.video_stream import (
 
 LOOP_TICK_SECONDS = 0.05
 
+# Video staleness watchdog: if the newest captured frame is older than this,
+# the system's "eyes" are frozen (RTSP stall or reconnect in progress) and
+# every autonomous decision would be based on an old photograph -- so pause
+# all autonomous motion instead of patrolling blind. 3s comfortably exceeds
+# the worst measured detection cadence while staying operator-fast.
+VIDEO_STALE_AFTER_SECONDS = 3.0
+
 RASTER_ROWS = 3
 PTZ_MOVE_TIMEOUT_SECONDS = 8.0
 PTZ_STATUS_POLL_INTERVAL_SECONDS = 0.4
@@ -411,9 +418,44 @@ class AutonomyController:
                     * (TRACK_ZOOM_SPEED / ZOOM_PULSE_SPEED)
                 )
 
+        video_stale = False
+
         try:
             while self._is_running():
                 now = time.monotonic()
+
+                # Staleness watchdog -- never scan blind. None (no frame ever,
+                # e.g. stream still connecting at start) is deliberately not
+                # treated as stale: that preserves existing start-up behavior;
+                # this gate targets a stream that WAS live and then froze.
+                frame_captured_at = video.get_latest_frame_captured_at()
+                stale = (
+                    frame_captured_at is not None
+                    and now - frame_captured_at >= VIDEO_STALE_AFTER_SECONDS
+                )
+                if stale and not video_stale:
+                    video_stale = True
+                    age = now - frame_captured_at
+                    print(
+                        f"[AUTONOMY] video stale ({age:.1f}s without a new frame) "
+                        "-- pausing autonomous motion",
+                        flush=True,
+                    )
+                    get_event_log().add("video_stale", f"{age:.1f}s without a new frame")
+                    _ptz_with_retry("stale-video stop", onvif.stop)
+                    if correction_ends_at is not None:
+                        book_correction_zoom(now)
+                        correction_ends_at = None
+                        correction_zoom_direction = 0.0
+                    move_issued = False
+                elif not stale and video_stale:
+                    video_stale = False
+                    print("[AUTONOMY] video recovered -- resuming", flush=True)
+                    get_event_log().add("video_recovered", "")
+                if video_stale:
+                    time.sleep(LOOP_TICK_SECONDS)
+                    continue
+
                 # Only the frame's dimensions are ever needed here (never
                 # pixel data), so use the cheap shape-only accessor instead
                 # of copying the full ~6MB frame on every tick (20x/sec).

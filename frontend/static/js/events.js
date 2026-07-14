@@ -10,7 +10,9 @@
     search_stopped: 'עצירת סריקה',
     drone_detected: 'זוהה רחפן',
     target_lost: 'המטרה אבדה',
-    loop_error: 'שגיאה במערכת האוטונומית'
+    loop_error: 'שגיאה במערכת האוטונומית',
+    video_stale: 'שידור הווידאו קפא - סריקה מושהית',
+    video_recovered: 'שידור הווידאו חזר - סריקה ממשיכה'
   };
 
   function formatTime(isoString) {

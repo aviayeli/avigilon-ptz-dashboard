@@ -8,7 +8,18 @@ from typing import Optional
 # Force FFmpeg's RTSP transport to TCP. UDP RTP packets are prone to being
 # dropped by Windows Firewall / NAT along the way, which otherwise shows up
 # as the capture silently losing frames and reconnecting on a loop.
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+#
+# Socket receive timeout (5s): without it, an NVR that stalls WITHOUT
+# closing the TCP connection leaves cap.read() blocked forever -- the frame
+# slot goes permanently stale while everything else keeps running. The
+# option was renamed across FFmpeg versions ('stimeout' in <5.0, 'timeout'
+# in >=5.0, both in microseconds); passing both is safe because FFmpeg only
+# warns about, never fails on, unconsumed dictionary options (and <5.0's
+# 'timeout' is a listen-mode-only option, inert for a client).
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|timeout;5000000|stimeout;5000000",
+)
 
 import cv2
 import numpy as np
@@ -312,6 +323,13 @@ class VideoStreamManager:
         # copying the full ~6MB frame just to read one dimension.
         with self._lock:
             return None if self._latest_frame is None else self._latest_frame.shape[1]
+
+    def get_latest_frame_captured_at(self) -> Optional[float]:
+        # For the autonomy loop's staleness watchdog: monotonic capture time
+        # of the newest frame, without copying pixels. None means no frame
+        # has ever arrived (a different condition from "frozen").
+        with self._lock:
+            return None if self._latest_frame is None else self._frame_captured_at
 
     def get_latest_frame_shape(self) -> Optional[tuple[int, int]]:
         # Same idea as get_latest_frame_width(), but (height, width) -- for

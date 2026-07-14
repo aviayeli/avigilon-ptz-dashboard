@@ -114,11 +114,19 @@ class FakeOnvif:
 
 
 class FakeVideo:
+    def __init__(self):
+        # Set to an old monotonic timestamp to simulate a frozen RTSP stream;
+        # None means "frames are flowing" (always-fresh capture time).
+        self.frozen_at = None
+
     def get_latest_frame_shape(self):
         return (720, 1280)
 
     def get_latest_frame_annotated(self):
         return None
+
+    def get_latest_frame_captured_at(self):
+        return self.frozen_at if self.frozen_at is not None else time.monotonic()
 
 
 class SharedResult:
@@ -313,6 +321,32 @@ check("persistent PTZ failure lands fail-safe in IDLE",
 check("loop_error event logged on persistent failure", "loop_error" in events)
 check("failsafe camera stop attempted", bool(fake_onvif.calls_of("stop")))
 ctl5.stop()
+
+# --- scenario 11: frozen video pauses all autonomous motion, then resumes ---
+shared.publish([])
+fake_onvif.clear()
+fake_onvif.moving = False
+events.clear()
+ctl6 = autonomy.AutonomyController()
+ctl6.start(-0.5, 0.5, -0.2, 0.2)
+check("scan active before freeze",
+      wait_for(lambda: fake_onvif.calls_of("absolute_move"), 2, "pre-freeze move"))
+fake_video.frozen_at = time.monotonic() - autonomy.VIDEO_STALE_AFTER_SECONDS - 1
+check("video_stale event logged",
+      wait_for(lambda: "video_stale" in events, 2, "video_stale event"))
+check("camera stopped when video went stale", bool(fake_onvif.calls_of("stop")))
+fake_onvif.clear()
+moved_while_stale = wait_for(
+    lambda: fake_onvif.calls_of("absolute_move"), 2.0, "moves while stale (should NOT happen)"
+)
+check("no autonomous moves while video is stale", not moved_while_stale)
+check("still SEARCHING (paused, not dead) while stale", ctl6.mode == Mode.SEARCHING)
+fake_video.frozen_at = None
+check("video_recovered event logged",
+      wait_for(lambda: "video_recovered" in events, 2, "video_recovered event"))
+check("scan resumes waypoint coverage after recovery",
+      wait_for(lambda: fake_onvif.calls_of("absolute_move"), 5, "post-recovery move"))
+ctl6.stop()
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed", flush=True)
 sys.exit(1 if FAIL else 0)
