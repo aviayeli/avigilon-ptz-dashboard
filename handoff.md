@@ -6,6 +6,82 @@
 
 ---
 
+## 0. Status Update — 2026-07-14 (hardware-test day, written on-site)
+
+The §3 protocol was executed against the real camera. Where this section
+contradicts the older sections below, this section wins.
+
+**Verified working on hardware:** boot + session logging, live stream,
+detection boxes, manual PTZ (d-pad / zoom / focus / wiper / IR — operator:
+"all working"), single-screen layout at 1920×1080 with zero page scroll,
+and the full autonomous chain: search → investigate → confirm →
+track + alarm → target lost → zoom restore → re-search. The server alarm
+fired repeatedly during real tracking (operator raised no audibility
+issue). The regression suite grew 24 → **26 scenarios** (investigation
+cooldown); it must stay 26/26.
+
+**Live findings → fixes shipped today (all evidence in
+`backend/logs/session-20260714-*.log` + `backend/snapshots/`):**
+1. **Car-as-drone false positive** — snapshot shows a 72% "drone" box that
+   is mostly a parked car. Root cause: the COCO cross-check list had only
+   indoor labels. Fix: `NON_DRONE_OBJECT_LABELS` (detection.py) now also
+   has person/car/truck/bus/motorcycle/bicycle/train/boat. Deliberately
+   NOT added: bird/airplane/kite — COCO calls real drones those.
+2. **Filter flicker leak** — yolov8n's read of the contradicting object
+   flickers frame to frame, so the same candidate leaked through every few
+   seconds (a dozen ~1.5s micro-investigations in 3 minutes). Fix: 10s
+   rejection memory (IoU 0.4) in the filter, cleared on any camera motion,
+   never refreshed by memory hits so it can't suppress a spot forever.
+3. **"Scan stuck"** (operator report) — failed (budget-exhausted)
+   investigations re-triggered back-to-back on the same still-visible
+   candidate; the raster made no progress for minutes. Fix:
+   `INVESTIGATE_FAIL_COOLDOWN_SECONDS = 8.0` suppresses candidate triggers
+   after a budget-exhausted end; motion triggers stay live.
+4. This machine's local `.env` still had the removed auth-era keys
+   (`DASHBOARD_*`, `SESSION_SECRET_KEY`) → pydantic `extra_forbidden`
+   crash at boot. Cleaned. Same symptom on another deployment = same cause.
+
+**Open issues (telemetry-backed, deliberately not yet fixed):**
+- **Close-target tracking loss** (reproduced twice): an approaching drone
+  outgrows the frame (box ratio 0.475 → 0.82) faster than the fixed
+  0.2-velocity zoom-out corrects, the model's confidence collapses on
+  frame-filling targets, → 3s timeout. At close range the lens was already
+  at its wide stop — box_ratio sat pinned ~0.47 across 10+ zoom-out pulses
+  (physical no-op), so control tuning cannot fully fix this; model
+  retraining on close-range frames is the real lever.
+- `_largest_drone_detection` selects by box area, which actively favors
+  close clutter over a small real drone (operator watched the camera
+  prefer a false positive over the actual drone). Candidate change:
+  confidence-based selection — but it interacts with tracking continuity,
+  so do it as its own measured change.
+- Waypoint arrivals look suspiciously fast: full-width pans reported
+  "reached" in 0.4s (one status poll). Either genuinely fast preset moves
+  or a GetStatus race (polled before the camera starts reporting motion).
+  The 1.2s dwell masks it either way; physically unverified.
+- The NVR channel delivers ~9 fps @ ~0.9 Mb/s, not 25/30 — NVR config,
+  not a bug.
+
+**Wiper Phase A (§4.1) answered:** `On` runs **one self-terminating cycle
+per press** — the fire-and-forget ideal; no Off-timer logic needed for a
+future auto-wiper. Cycle length not yet timed.
+
+**Model retraining is now the top lever** — remaining misses/false fires
+are model quality, not control logic. New tools (operator will record and
+retrain `best_merged.pt` on a stronger machine):
+- `backend/scripts/record_training_video.py` — stream-copies the native
+  H.264 to `backend/training_data/*.mp4` (~0 CPU; needs
+  `pip install imageio-ffmpeg`, already in this machine's venv; `-an`
+  because the NVR's pcm_mulaw audio track can't be copied into MP4).
+- `backend/scripts/record_training_frames.py` — clean full-res JPEGs at a
+  fixed interval, for direct labeling.
+- Collection guidance: fly where detection fails (near the cars, very
+  close to the camera, far against sky) AND record no-drone scenes as
+  background negatives — that is what teaches the model the car is not a
+  drone. Event snapshots in `backend/snapshots/` have detection boxes
+  burned in — useful for failure review, **unusable as training images**.
+
+---
+
 ## 1. Your Role & Directives
 
 You are the **AI Chief Software Architect, Engineering Manager, and Technical Lead** for this project. Before doing anything else, read **`.claude/ai_architect_guidelines.md`** in the repo root and follow it strictly. Non-negotiables from it, proven valuable this week:

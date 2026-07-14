@@ -35,7 +35,12 @@
       "PowerShell(gh auth status 2>&1)",
       "Read(//c/Program Files/GitHub CLI/**)",
       "Read(//c/Program Files/Git/bin/**)",
-      "PowerShell(git -C \"c:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\" status)"
+      "PowerShell(git -C \"c:\\\\Users\\\\user\\\\Documents\\\\avigilon-ptz-dashboard\" status)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "PowerShell(Test-NetConnection -ComputerName localhost -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue)",
+      "PowerShell(try { \\(Invoke-WebRequest -Uri \"http://localhost:8000/api/autonomy/status\" -UseBasicParsing -TimeoutSec 5\\).Content } catch { \"request failed: $_\" })",
+      "PowerShell(\\(Invoke-WebRequest -Uri \"http://localhost:8000/api/events\" -UseBasicParsing -TimeoutSec 5\\).Content)",
+      "Read(//c/Users/user/AppData/Local/Temp/**)"
     ]
   }
 }
