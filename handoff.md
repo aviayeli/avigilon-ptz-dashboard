@@ -6,7 +6,53 @@
 
 ---
 
-## 0. Status Update — 2026-07-14 (hardware-test day, written on-site)
+## 0. Status Update — 2026-07-14 evening (post-test, WSL2 dev machine)
+
+Written after the hardware-test day, for the instance running the
+2026-07-15 field session. Where this contradicts anything below, this wins.
+
+**⚠ Hardware-model correction:** ONVIF `GotoHomePosition` **works** on this
+camera (operator-verified in the field). Every older claim that it is a
+no-op — below in §0.1 and in old code comments — is wrong. `goto_home()`
+now marks camera motion and blocks on `wait_until_stopped()` until the
+sweep settles (commit `c5123bb`), fixing a motion-suppression leak.
+
+**Shipped since the test session:**
+1. **UI redesign** (`8d288fd`): new tactical-dark markup/CSS from the Claude
+   Design project. Same DOM contract — zero JS changes (verified: all 39
+   ids + every selector/state class). Google Fonts links deliberately
+   dropped (isolated network); `theme.css` deleted. **The zero-page-scroll
+   check at the ops machine's real 1920×1080 must be redone** (§3 step 2).
+2. **ONVIF capability discovery** (`a4a7f2e`): boot now logs `[ONVIF]`
+   lines — absolute pan/tilt + zoom position spaces with ranges,
+   `HomeSupported`, `FixedHomePosition`. `get_pan_tilt_limits()` is now
+   the intersection of the generic space range and configured
+   `PanTiltLimits`. **Grep the session log for `[ONVIF]` and record the
+   values** — they gate the pending work below.
+
+**2026-07-15 field checklist (agreed with Avi):**
+1. Boot against the hardware; verify the redesigned UI (zero scroll,
+   alarm banner, PTZ bindings) and capture the `[ONVIF]` lines.
+2. **P0 recording mission:** close-approach drone passes via
+   `backend/scripts/record_training_frames.py` (+ no-drone negatives).
+   Telemetry shows model confidence collapses as box_ratio grows past
+   ~0.6 (0.66→0.35→nothing; boxes clipped at frame edges) — the fix plan
+   is P1 size-conditioned tracking-confidence floor, then P2 state-driven
+   **padded** inference (padding, not downscaling: Ultralytics letterboxes
+   to 640 regardless, so pre-downscaling can't shrink the drone's relative
+   size). Check close frames for blur (focus?) vs. sharp silhouette.
+3. Wiper Phase A item 2/3 (contamination + rain) if conditions allow.
+
+**Pending, evidence-gated (do not start before the `[ONVIF]` log exists):**
+steps 3–5 of the coordinate-mapping plan — home-on-boot + Set Center →
+`calibrate_center()` (behind a `HOME_ON_BOOT` flag; note the button's
+semantics change), wrap-aware pan mapping (pan is 360° continuous — the
+current clamp amputates seam-crossing sectors), degrees UI only if a
+degrees space is reported. Suite must stay **26/26**.
+
+---
+
+## 0.1. Status Update — 2026-07-14 (hardware-test day, written on-site)
 
 The §3 protocol was executed against the real camera. Where this section
 contradicts the older sections below, this section wins.
