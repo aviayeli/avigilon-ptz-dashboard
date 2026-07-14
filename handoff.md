@@ -48,7 +48,19 @@ steps 3–5 of the coordinate-mapping plan — home-on-boot + Set Center →
 `calibrate_center()` (behind a `HOME_ON_BOOT` flag; note the button's
 semantics change), wrap-aware pan mapping (pan is 360° continuous — the
 current clamp amputates seam-crossing sectors), degrees UI only if a
-degrees space is reported. Suite must stay **26/26**.
+degrees space is reported.
+
+**Pre-field-test stability batch (2026-07-14 late, commits `6d9dae0`…
+`270c3c9`):** bounded SOAP timeouts on every ONVIF transport (5s op/10s
+connect — a hung NVR TCP connection can no longer freeze the autonomy loop
+mid-move); retry-once fault boundary on all loop-issued PTZ calls (one
+transient SOAP error no longer kills a live track; two consecutive still
+fail-safe to IDLE); RTSP socket receive timeout + **video staleness
+watchdog** (frame older than 3s → camera stopped, `video_stale` event,
+autonomous motion paused until `video_recovered` — never scan blind); boot
+refuses to start if either `best_merged.pt` or `yolov8n.pt` is missing from
+`backend/` (offline network — no auto-download). Suite is now **38/38**
+(was 26) — it must stay 38/38.
 
 ---
 
