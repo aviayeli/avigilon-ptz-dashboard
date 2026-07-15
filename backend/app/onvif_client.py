@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import timedelta
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -19,6 +20,17 @@ SOAP_OPERATION_TIMEOUT_SECONDS = 5.0
 # Document/connection establishment (WSDLs are bundled local files, so this
 # mostly bounds the initial connection handshake).
 SOAP_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+# Dead-man's switch for operator-held continuous moves: the browser sends
+# Stop on button release, but that request can be lost (tab closed mid-hold,
+# network drop, laptop sleep) -- without a bound, the camera would keep
+# moving forever. Manual moves therefore self-stop this many seconds after
+# the last command unless refreshed (the frontend re-sends the move every
+# ~2s while the button is held). Enforced twice: camera-side via the
+# optional ONVIF ContinuousMove Timeout element, and locally via a watchdog
+# timer in case the NVR strips/rejects Timeout.
+MANUAL_MOVE_SELF_STOP_SECONDS = 5.0
 
 
 def build_bounded_transport() -> Transport:
@@ -134,6 +146,52 @@ class OnvifClient:
         self._motion_state_lock = threading.Lock()
         self._camera_moving: bool = False
         self._camera_motion_ended_at: float = 0.0
+        # Dead-man watchdog state (see MANUAL_MOVE_SELF_STOP_SECONDS). The
+        # generation counter makes cancellation race-free: a timer that
+        # already started firing aborts when it sees a newer generation.
+        self._deadman_lock = threading.Lock()
+        self._deadman_generation = 0
+        self._deadman_timer: Optional[threading.Timer] = None
+        # Sticky: flipped off after the first NVR rejection of the optional
+        # ContinuousMove Timeout element, so every later move isn't a
+        # double SOAP round-trip.
+        self._continuous_move_timeout_supported = True
+
+    def _cancel_deadman(self) -> None:
+        # Any successful camera command supersedes a pending dead-man stop:
+        # whoever commanded last (operator refresh, autonomy loop, an
+        # explicit stop) now owns the camera's motion state.
+        with self._deadman_lock:
+            self._deadman_generation += 1
+            if self._deadman_timer is not None:
+                self._deadman_timer.cancel()
+                self._deadman_timer = None
+
+    def _schedule_deadman(self, seconds: float) -> None:
+        with self._deadman_lock:
+            self._deadman_generation += 1
+            generation = self._deadman_generation
+            if self._deadman_timer is not None:
+                self._deadman_timer.cancel()
+
+            def _fire() -> None:
+                with self._deadman_lock:
+                    if generation != self._deadman_generation:
+                        return  # superseded between firing and acquiring the lock
+                    self._deadman_timer = None
+                print(
+                    "[PTZ] dead-man watchdog: no follow-up command -- stopping camera",
+                    flush=True,
+                )
+                try:
+                    self.stop()
+                except Exception as exc:
+                    print(f"[PTZ] dead-man stop failed: {exc}", flush=True)
+
+            timer = threading.Timer(seconds, _fire)
+            timer.daemon = True
+            self._deadman_timer = timer
+            timer.start()
 
     def _mark_camera_moving(self) -> None:
         with self._motion_state_lock:
@@ -229,7 +287,16 @@ class OnvifClient:
         netloc = f"{user}:{password}@{parts.netloc}"
         return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
-    def continuous_move(self, pan: float, tilt: float, zoom: float) -> None:
+    def continuous_move(
+        self,
+        pan: float,
+        tilt: float,
+        zoom: float,
+        self_stop_seconds: Optional[float] = None,
+    ) -> None:
+        # self_stop_seconds arms the dead-man's switch (manual operator
+        # moves); autonomy passes None because its loop time-boxes and stops
+        # every command itself.
         profile = self.get_channel_profile()
         # [PTZ] lines are the command audit trail: every camera-motion
         # command this backend issues is logged here (the single choke
@@ -237,22 +304,53 @@ class OnvifClient:
         # still have been delivered, so the attempt itself is the evidence
         # that matters when correlating physical motion with the log.
         print(
-            f"[PTZ] continuous_move pan={pan:.2f} tilt={tilt:.2f} zoom={zoom:.2f}",
+            f"[PTZ] continuous_move pan={pan:.2f} tilt={tilt:.2f} zoom={zoom:.2f}"
+            + (f" self_stop={self_stop_seconds:g}s" if self_stop_seconds else ""),
             flush=True,
         )
-        request = self.ptz_service.create_type("ContinuousMove")
-        request.ProfileToken = profile.token
-        request.Velocity = {
-            "PanTilt": {"x": _clamp(pan), "y": _clamp(tilt)},
-            "Zoom": {"x": _clamp(zoom)},
-        }
-        self.ptz_service.ContinuousMove(request)
+
+        def _send(with_timeout: bool) -> None:
+            request = self.ptz_service.create_type("ContinuousMove")
+            request.ProfileToken = profile.token
+            request.Velocity = {
+                "PanTilt": {"x": _clamp(pan), "y": _clamp(tilt)},
+                "Zoom": {"x": _clamp(zoom)},
+            }
+            if with_timeout:
+                # Optional ONVIF element: the camera itself stops the move
+                # after this duration -- survives even a dead server.
+                request.Timeout = timedelta(seconds=self_stop_seconds)
+            self.ptz_service.ContinuousMove(request)
+
+        use_timeout = (
+            self_stop_seconds is not None and self._continuous_move_timeout_supported
+        )
+        try:
+            _send(use_timeout)
+        except Exception:
+            if not use_timeout:
+                raise
+            # The failure may be the NVR rejecting the optional Timeout
+            # element rather than a transport problem -- retry once without
+            # it (the local watchdog below still enforces the self-stop).
+            _send(False)
+            self._continuous_move_timeout_supported = False
+            print(
+                "[PTZ] NVR rejected ContinuousMove Timeout -- "
+                "relying on the local dead-man watchdog only",
+                flush=True,
+            )
         # Mark state only after the SOAP call returns successfully -- if it
         # raised, the camera never got the command.
         if pan != 0.0 or tilt != 0.0 or zoom != 0.0:
             self._mark_camera_moving()
+            if self_stop_seconds is not None:
+                self._schedule_deadman(self_stop_seconds)
+            else:
+                self._cancel_deadman()
         else:
             self._mark_camera_stopped()
+            self._cancel_deadman()
 
     def stop(self) -> None:
         profile = self.get_channel_profile()
@@ -263,6 +361,7 @@ class OnvifClient:
         request.Zoom = True
         self.ptz_service.Stop(request)
         self._mark_camera_stopped()
+        self._cancel_deadman()
 
     def absolute_move(self, pan: float, tilt: float, speed: Optional[float] = None) -> None:
         profile = self.get_channel_profile()
@@ -287,6 +386,7 @@ class OnvifClient:
         # polls during absolute moves and every code path that stops
         # scanning calls stop().
         self._mark_camera_moving()
+        self._cancel_deadman()
 
     def get_ptz_status(self) -> dict:
         profile = self.get_channel_profile()
@@ -452,6 +552,7 @@ class OnvifClient:
         # and (b) callers can rely on the camera actually being at home when
         # this returns.
         self._mark_camera_moving()
+        self._cancel_deadman()
         self.wait_until_stopped()
 
     def continuous_focus(self, speed: float) -> None:

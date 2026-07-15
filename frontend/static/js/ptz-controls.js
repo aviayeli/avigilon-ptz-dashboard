@@ -35,16 +35,34 @@
   // the move immediately after it starts. Capturing the pointer keeps
   // up/cancel events targeted at this button regardless of where the
   // pointer physically ends up.
+  // The backend arms a 5s dead-man on manual moves (camera-side
+  // ContinuousMove Timeout + a server watchdog), so a page that dies
+  // mid-hold can never leave the camera moving. The flip side: a hold
+  // longer than 5s must refresh the command, hence the keepalive below.
+  const KEEPALIVE_INTERVAL_MS = 2000;
+
   function bindPressHold(selector, buildMoveBody, moveUrl, stopUrl, buildStopBody) {
     root.querySelectorAll(selector).forEach((btn) => {
+      let keepalive = null;
+      const clearKeepalive = () => {
+        if (keepalive !== null) {
+          clearInterval(keepalive);
+          keepalive = null;
+        }
+      };
+
       btn.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         btn.setPointerCapture(event.pointerId);
         btn.classList.add('is-pressed');
-        withLoadingState(btn, Api.postJSON(moveUrl, buildMoveBody(btn)));
+        const send = () => withLoadingState(btn, Api.postJSON(moveUrl, buildMoveBody(btn)));
+        send();
+        clearKeepalive();
+        keepalive = setInterval(send, KEEPALIVE_INTERVAL_MS);
       });
 
       const release = () => {
+        clearKeepalive();
         btn.classList.remove('is-pressed');
         withLoadingState(btn, Api.postJSON(stopUrl, buildStopBody ? buildStopBody(btn) : {}));
       };

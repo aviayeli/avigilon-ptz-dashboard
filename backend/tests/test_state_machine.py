@@ -348,5 +348,85 @@ check("scan resumes waypoint coverage after recovery",
       wait_for(lambda: fake_onvif.calls_of("absolute_move"), 5, "post-recovery move"))
 ctl6.stop()
 
+# --- OnvifClient dead-man watchdog (real client, fake zeep PTZ service) ---
+from datetime import timedelta  # noqa: E402
+
+from app.onvif_client import OnvifClient  # noqa: E402
+
+
+class FakePtzService:
+    def __init__(self):
+        self.ops = []
+        self.reject_timeout = False
+
+    def create_type(self, name):
+        return types.SimpleNamespace(Timeout=None)
+
+    def ContinuousMove(self, request):
+        if self.reject_timeout and request.Timeout is not None:
+            raise RuntimeError("ter:InvalidArgVal (Timeout)")
+        self.ops.append(("ContinuousMove", request.Timeout))
+
+    def Stop(self, request):
+        self.ops.append(("Stop", None))
+
+
+def make_ptz_client():
+    client = OnvifClient()
+    client._ptz_service = FakePtzService()
+    client._profile = types.SimpleNamespace(
+        token="prof",
+        PTZConfiguration=types.SimpleNamespace(
+            token="cfg", NodeToken="node", PanTiltLimits=None
+        ),
+        VideoSourceConfiguration=types.SimpleNamespace(SourceToken="src"),
+    )
+    return client
+
+
+def stops_recorded(client):
+    return [op for op in client._ptz_service.ops if op[0] == "Stop"]
+
+
+# manual move arms the dead-man: Timeout element sent, stop fires unaided
+client_a = make_ptz_client()
+client_a.continuous_move(0.5, 0.0, 0.0, self_stop_seconds=0.4)
+check("deadman: ONVIF Timeout element sent with manual move",
+      client_a._ptz_service.ops[-1] == ("ContinuousMove", timedelta(seconds=0.4)))
+check("deadman: watchdog stop fires when nothing follows",
+      wait_for(lambda: stops_recorded(client_a), 1.5, "deadman stop"))
+check("deadman: camera marked stopped after watchdog stop",
+      client_a.is_camera_motion_settled(0.0))
+
+# a follow-up command supersedes the pending dead-man (no spurious stop)
+client_b = make_ptz_client()
+client_b.continuous_move(0.5, 0.0, 0.0, self_stop_seconds=0.5)
+time.sleep(0.2)
+client_b.stop()  # operator released normally
+stops_before = len(stops_recorded(client_b))
+time.sleep(0.6)
+check("deadman: superseded timer never fires a second stop",
+      len(stops_recorded(client_b)) == stops_before)
+
+# autonomy-style unbounded move (no self_stop) never schedules a watchdog
+client_c = make_ptz_client()
+client_c.continuous_move(0.3, 0.0, 0.0)
+time.sleep(0.6)
+check("deadman: not armed for autonomy moves (no self_stop)",
+      not stops_recorded(client_c))
+client_c.stop()
+
+# NVR that rejects the optional Timeout: fallback move sent without it,
+# support flag flips sticky, and the local watchdog still enforces the stop
+client_d = make_ptz_client()
+client_d._ptz_service.reject_timeout = True
+client_d.continuous_move(0.5, 0.0, 0.0, self_stop_seconds=0.3)
+check("deadman: Timeout rejection falls back to a plain move",
+      ("ContinuousMove", None) in client_d._ptz_service.ops)
+check("deadman: Timeout support flag flips sticky on rejection",
+      client_d._continuous_move_timeout_supported is False)
+check("deadman: local watchdog still stops without camera-side Timeout",
+      wait_for(lambda: stops_recorded(client_d), 1.5, "fallback deadman stop"))
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed", flush=True)
 sys.exit(1 if FAIL else 0)

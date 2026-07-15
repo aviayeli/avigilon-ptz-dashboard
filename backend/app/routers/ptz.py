@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.autonomy import Mode, get_autonomy_controller
-from app.onvif_client import get_onvif_client
+from app.onvif_client import MANUAL_MOVE_SELF_STOP_SECONDS, get_onvif_client
 
 router = APIRouter(prefix="/api/ptz")
 
@@ -40,7 +40,15 @@ class AuxRequest(BaseModel):
 @router.post("/move", dependencies=[Depends(take_manual_control)])
 def move(payload: MoveRequest):
     try:
-        get_onvif_client().continuous_move(payload.pan, payload.tilt, payload.zoom)
+        # Dead-man armed: a browser that dies mid-hold (lost Stop request)
+        # must not leave the camera moving forever. The frontend refreshes
+        # the move every ~2s while the button is held.
+        get_onvif_client().continuous_move(
+            payload.pan,
+            payload.tilt,
+            payload.zoom,
+            self_stop_seconds=MANUAL_MOVE_SELF_STOP_SECONDS,
+        )
     except Exception as exc:
         raise HTTPException(502, f"PTZ move failed: {exc}") from exc
     return {"ok": True}
