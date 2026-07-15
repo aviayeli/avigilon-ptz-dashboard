@@ -231,6 +231,15 @@ class OnvifClient:
 
     def continuous_move(self, pan: float, tilt: float, zoom: float) -> None:
         profile = self.get_channel_profile()
+        # [PTZ] lines are the command audit trail: every camera-motion
+        # command this backend issues is logged here (the single choke
+        # point), BEFORE the SOAP call -- a command that times out may
+        # still have been delivered, so the attempt itself is the evidence
+        # that matters when correlating physical motion with the log.
+        print(
+            f"[PTZ] continuous_move pan={pan:.2f} tilt={tilt:.2f} zoom={zoom:.2f}",
+            flush=True,
+        )
         request = self.ptz_service.create_type("ContinuousMove")
         request.ProfileToken = profile.token
         request.Velocity = {
@@ -247,6 +256,7 @@ class OnvifClient:
 
     def stop(self) -> None:
         profile = self.get_channel_profile()
+        print("[PTZ] stop", flush=True)
         request = self.ptz_service.create_type("Stop")
         request.ProfileToken = profile.token
         request.PanTilt = True
@@ -256,6 +266,11 @@ class OnvifClient:
 
     def absolute_move(self, pan: float, tilt: float, speed: Optional[float] = None) -> None:
         profile = self.get_channel_profile()
+        print(
+            f"[PTZ] absolute_move pan={pan:.2f} tilt={tilt:.2f}"
+            + (f" speed={speed:.2f}" if speed is not None else ""),
+            flush=True,
+        )
         request = self.ptz_service.create_type("AbsoluteMove")
         request.ProfileToken = profile.token
         request.Position = {"PanTilt": {"x": _clamp(pan), "y": _clamp(tilt)}}
@@ -424,6 +439,7 @@ class OnvifClient:
         # Field-verified 2026-07-14: GotoHomePosition physically moves this
         # camera (an earlier hardware note claiming it was a no-op is wrong).
         profile = self.get_channel_profile()
+        print("[PTZ] goto_home", flush=True)
         request = self.ptz_service.create_type("GotoHomePosition")
         request.ProfileToken = profile.token
         try:
