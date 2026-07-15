@@ -39,21 +39,30 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="stati
 
 
 @app.on_event("startup")
-def discover_ptz_capabilities_on_boot():
-    # Read-only ONVIF discovery (position spaces, limits, home support),
-    # logged into the session log so hardware sessions capture what this
-    # NVR/camera stack actually reports. Runs on a background thread and
-    # never blocks or fails boot: the server must still come up (degraded)
-    # with no NVR configured or reachable.
-    def _discover():
+def ptz_boot_safety_and_discovery():
+    # Two boot-time ONVIF actions on one background thread (never blocks or
+    # fails boot -- the server must still come up degraded with no NVR
+    # configured or reachable):
+    #
+    # 1. Best-effort safety Stop: if the previous process died hard (power
+    #    cut, task kill) mid-ContinuousMove, the camera is still obeying
+    #    that command and nothing else would ever clear it. One Stop at
+    #    boot guarantees a fresh server never inherits stale motion.
+    # 2. Read-only capability discovery, logged into the session log so
+    #    hardware sessions capture what this NVR/camera stack reports.
+    def _boot():
+        client = get_onvif_client()
         try:
-            get_onvif_client().get_ptz_capabilities()
+            client.stop()
+            print("[PTZ] boot safety stop issued", flush=True)
+        except Exception as exc:
+            print(f"[PTZ] boot safety stop skipped (NVR unreachable?): {exc}", flush=True)
+        try:
+            client.get_ptz_capabilities()
         except Exception as exc:
             print(f"[ONVIF] boot capability discovery skipped: {exc}", flush=True)
 
-    threading.Thread(
-        target=_discover, daemon=True, name="ptz-capability-discovery"
-    ).start()
+    threading.Thread(target=_boot, daemon=True, name="ptz-boot").start()
 
 
 @app.on_event("shutdown")
