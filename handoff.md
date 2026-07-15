@@ -60,7 +60,28 @@ watchdog** (frame older than 3s → camera stopped, `video_stale` event,
 autonomous motion paused until `video_recovered` — never scan blind); boot
 refuses to start if either `best_merged.pt` or `yolov8n.pt` is missing from
 `backend/` (offline network — no auto-download). Suite is now **38/38**
-(was 26) — it must stay 38/38.
+(was 26).
+
+**Phantom-movement defenses (2026-07-15, commits `1860d04`…`0b9cef0`),
+after the operator reported the camera moving while the dashboard was
+IDLE:**
+- `[PTZ]` audit logging at the OnvifClient choke point — every backend
+  motion command is now a timestamped session-log line. **Diagnostic rule:
+  physical motion with no `[PTZ]` line and no `/api/ptz` POST in the same
+  window = externally commanded** (check camera Park Action / auto-tracking
+  / tours, ACC rules, other clients).
+- Boot-time best-effort Stop — a fresh server never inherits stale motion
+  from a hard-killed predecessor.
+- 5s dead-man on manual moves (ONVIF ContinuousMove Timeout + local
+  watchdog + 2s frontend keepalive) — a tab that dies mid-hold can no
+  longer leave the camera moving. **Field-verify:** hold a d-pad button
+  >5s (must keep moving), and check the log for "NVR rejected
+  ContinuousMove Timeout" (fallback engaged is fine, just note it).
+- Poisoned-controller guard — stop() no longer claims IDLE while the loop
+  thread is stuck in a camera call; start() returns 503 until it dies
+  (bounded by the 5s SOAP timeouts — retry, don't restart).
+
+Suite is now **53/53** — it must stay 53/53.
 
 ---
 
