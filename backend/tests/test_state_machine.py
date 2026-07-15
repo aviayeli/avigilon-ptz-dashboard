@@ -79,16 +79,22 @@ class FakeOnvif:
         self.moving = False
         # method name -> how many upcoming calls raise (SOAP fault injection)
         self.fail_next = {}
+        # method name -> seconds the next call blocks (hung-SOAP injection)
+        self.block_next = {}
 
     def _rec(self, *call):
         # Records the attempt first, then raises if a failure is queued --
         # so calls_of() counts attempts, letting scenarios assert retries.
+        block = 0.0
         with self.lock:
             self.calls.append(call)
             remaining = self.fail_next.get(call[0], 0)
             if remaining > 0:
                 self.fail_next[call[0]] = remaining - 1
                 raise RuntimeError(f"injected {call[0]} failure")
+            block = self.block_next.pop(call[0], 0.0)
+        if block:
+            time.sleep(block)  # outside the lock so calls_of() stays usable
 
     def continuous_move(self, pan, tilt, zoom):
         self._rec("continuous_move", pan, tilt, zoom)
@@ -347,6 +353,41 @@ check("video_recovered event logged",
 check("scan resumes waypoint coverage after recovery",
       wait_for(lambda: fake_onvif.calls_of("absolute_move"), 5, "post-recovery move"))
 ctl6.stop()
+
+# --- scenario 12: a hung camera call poisons the controller; start() is
+# refused until the stuck loop thread actually dies (never two loops) ---
+shared.publish([])
+motion["active"] = False
+fake_onvif.clear()
+fake_onvif.moving = False
+events.clear()
+fake_onvif.block_next["absolute_move"] = 7.0  # longer than stop()'s 5s join
+ctl7 = autonomy.AutonomyController()
+ctl7.start(-0.5, 0.5, -0.2, 0.2)
+check("blocking waypoint move issued",
+      wait_for(lambda: fake_onvif.calls_of("absolute_move"), 2, "blocking move"))
+stop_started = time.monotonic()
+ctl7.stop()
+stop_took = time.monotonic() - stop_started
+check("stop() returns after the join window despite the stuck thread",
+      4.0 <= stop_took <= 6.5)
+refused = False
+try:
+    ctl7.start(-0.5, 0.5, -0.2, 0.2)
+except RuntimeError:
+    refused = True
+check("start() refused while the previous loop thread is still alive", refused)
+check("controller does not claim IDLE while poisoned", ctl7.mode != Mode.IDLE)
+check("stuck-thread condition logged as loop_error event", "loop_error" in events)
+check("loop exits to IDLE once the blocked call finally returns",
+      wait_for(lambda: ctl7.mode == Mode.IDLE, 6, "post-block IDLE"))
+restarted = False
+try:
+    ctl7.start(-0.5, 0.5, -0.2, 0.2)
+    restarted = True
+finally:
+    ctl7.stop()
+check("start() accepted again after the thread terminates", restarted)
 
 # --- OnvifClient dead-man watchdog (real client, fake zeep PTZ service) ---
 from datetime import timedelta  # noqa: E402

@@ -287,6 +287,18 @@ class AutonomyController:
             }
 
     def start(self, pan_min: float, pan_max: float, tilt_min: float, tilt_max: float) -> None:
+        # Poisoned-controller guard: a previous session's loop thread that
+        # outlived its stop() join (blocked in a SOAP call, bounded by the
+        # transport timeouts) may still issue camera commands until it dies.
+        # Two loops must never command the camera concurrently, so refuse
+        # to start a new session while the old thread is alive.
+        stale = self._thread
+        if stale is not None and stale.is_alive():
+            raise RuntimeError(
+                "previous autonomy session is still shutting down "
+                "(camera call in flight) -- try again in a few seconds"
+            )
+
         # If a drone is already visible when the operator starts the system
         # (e.g. a previous tracking session just ended but the drone never
         # left), engage it immediately: lock on, alarm, track. Detection runs
@@ -319,15 +331,39 @@ class AutonomyController:
         was_running = self._is_running()
         with self._lock:
             self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-            self._thread = None
+        thread = self._thread
+        if thread is not None:
+            # A loop blocked inside a slow SOAP call (bounded by the
+            # transport timeouts) can outlive this join. Repeat stop()
+            # calls -- e.g. one per manual command while poisoned -- use a
+            # short join so operator commands aren't each delayed by the
+            # full window.
+            thread.join(timeout=5.0 if was_running else 0.5)
+            if thread.is_alive():
+                print(
+                    "[AUTONOMY] loop thread did not exit in time (blocked "
+                    "camera call?) -- controller poisoned: new sessions are "
+                    "refused until it terminates",
+                    flush=True,
+                )
+                get_event_log().add(
+                    "loop_error",
+                    "autonomy thread stuck in a camera call; wait a few "
+                    "seconds and retry (restart the server if it persists)",
+                )
+            else:
+                self._thread = None
         set_drone_verification_enabled(True)
         self._safe_stop_camera()
         self._set_alarm(False)
         self._set_last_detection(None)
-        with self._lock:
-            self._mode = Mode.IDLE
+        # Only claim IDLE when the loop thread is confirmed dead: IDLE is
+        # what lets take_manual_control() hand the camera to the operator,
+        # and a still-alive loop could otherwise command it concurrently.
+        # (A poisoned loop's own finally-block sets IDLE when it exits.)
+        if self._thread is None:
+            with self._lock:
+                self._mode = Mode.IDLE
         if was_running:
             get_event_log().add("search_stopped", "")
 

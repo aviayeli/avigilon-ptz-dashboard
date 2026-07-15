@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.autonomy import get_autonomy_controller
@@ -38,7 +38,13 @@ def start(payload: StartRequest):
 
     # If a drone is already in view, start() engages it immediately
     # (tracking + alarm) instead of refusing.
-    get_autonomy_controller().start(pan_min, pan_max, tilt_min, tilt_max)
+    try:
+        get_autonomy_controller().start(pan_min, pan_max, tilt_min, tilt_max)
+    except RuntimeError as exc:
+        # Poisoned-controller guard: the previous session's loop thread is
+        # still finishing a camera call. Transient by construction (bounded
+        # by the SOAP timeouts) -- the operator just retries.
+        raise HTTPException(503, str(exc)) from exc
     return {"ok": True}
 
 
