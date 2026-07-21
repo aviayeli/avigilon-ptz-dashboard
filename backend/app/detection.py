@@ -1,4 +1,4 @@
-import time
+﻿import time
 from dataclasses import dataclass
 from functools import lru_cache
 from math import radians, tan
@@ -78,9 +78,10 @@ FALSE_POSITIVE_CONFIDENCE = 0.4
 REJECTION_MEMORY_SECONDS = 10.0
 REJECTION_MEMORY_IOU = 0.4
 REJECTION_MEMORY_MAX_ENTRIES = 20
-# Only ever touched from the single detection thread
-# (VideoStreamManager._detection_loop), so no lock is needed.
-_rejection_memory: list[tuple[tuple[int, int, int, int], float]] = []
+# Entries are (box, expires_at, coco_label). Only ever touched from the
+# single detection thread (VideoStreamManager._detection_loop), so no lock
+# is needed.
+_rejection_memory: list[tuple[tuple[int, int, int, int], float, str]] = []
 
 # Import order matters: disable Ultralytics' online telemetry/update checks
 # before the first YOLO() construction, since a hang/delay on this slow
@@ -159,7 +160,7 @@ def get_general_detector() -> DroneDetector:
     return DroneDetector(GENERAL_MODEL_PATH)
 
 
-def _iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:
+def box_iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
     inter_x1, inter_y1 = max(ax1, bx1), max(ay1, by1)
@@ -173,11 +174,15 @@ def _iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> 
 
 def filter_false_positive_drones(
     frame: np.ndarray, detections: list[Detection], camera_settled: bool = True
-) -> list[Detection]:
+) -> tuple[list[Detection], list[tuple[tuple[int, int, int, int], str]]]:
+    # Returns (verified detections, rejected regions). Each rejected region
+    # is (box, coco_label) -- the caller (autonomy) uses these to recognize
+    # that the object it is currently locked onto has been positively
+    # identified as something other than a drone.
     global _rejection_memory
     drone_candidates = [d for d in detections if d.label.lower() == "drone"]
     if not drone_candidates:
-        return detections
+        return detections, []
 
     now = time.monotonic()
     if not camera_settled:
@@ -185,42 +190,53 @@ def filter_false_positive_drones(
         # reframes or rescales the scene and invalidates all of them.
         _rejection_memory = []
     else:
-        _rejection_memory = [(box, exp) for box, exp in _rejection_memory if exp > now]
+        _rejection_memory = [entry for entry in _rejection_memory if entry[1] > now]
 
     general_results = get_general_detector().detect(frame)
 
     verified: list[Detection] = []
+    rejected: list[tuple[tuple[int, int, int, int], str]] = []
     for detection in detections:
         if detection.label.lower() != "drone":
             verified.append(detection)
             continue
 
-        contradicted = any(
-            g.label.lower() in NON_DRONE_OBJECT_LABELS
-            and g.confidence >= FALSE_POSITIVE_CONFIDENCE
-            and _iou(detection.box, g.box) >= FALSE_POSITIVE_OVERLAP_IOU
-            for g in general_results
+        contradicting = next(
+            (
+                g
+                for g in general_results
+                if g.label.lower() in NON_DRONE_OBJECT_LABELS
+                and g.confidence >= FALSE_POSITIVE_CONFIDENCE
+                and box_iou(detection.box, g.box) >= FALSE_POSITIVE_OVERLAP_IOU
+            ),
+            None,
         )
         remembered = (
             camera_settled
-            and not contradicted
-            and any(
-                _iou(detection.box, box) >= REJECTION_MEMORY_IOU
-                for box, _ in _rejection_memory
+            and contradicting is None
+            and next(
+                (
+                    label
+                    for box, _, label in _rejection_memory
+                    if box_iou(detection.box, box) >= REJECTION_MEMORY_IOU
+                ),
+                None,
             )
         )
-        if contradicted:
+        if contradicting is not None:
             if camera_settled:
                 _rejection_memory.append(
-                    (detection.box, now + REJECTION_MEMORY_SECONDS)
+                    (detection.box, now + REJECTION_MEMORY_SECONDS, contradicting.label)
                 )
                 _rejection_memory = _rejection_memory[-REJECTION_MEMORY_MAX_ENTRIES:]
+            rejected.append((detection.box, contradicting.label))
             print(
                 f"[DETECT] rejected drone candidate (confidence={detection.confidence:.2f}) "
-                "-- overlaps a confidently-classified non-drone object",
+                f"-- overlaps a confidently-classified non-drone object ({contradicting.label})",
                 flush=True,
             )
         elif remembered:
+            rejected.append((detection.box, remembered))
             print(
                 f"[DETECT] rejected drone candidate (confidence={detection.confidence:.2f}) "
                 "-- same region was rejected moments ago (memory)",
@@ -229,4 +245,4 @@ def filter_false_positive_drones(
         else:
             verified.append(detection)
 
-    return verified
+    return verified, rejected

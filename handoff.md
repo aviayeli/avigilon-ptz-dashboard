@@ -6,7 +6,61 @@
 
 ---
 
-## 0. Status Update — 2026-07-14 evening (post-test, WSL2 dev machine)
+## 0. Status Update — 2026-07-21 (motion-first lock-on rewrite, on-site)
+
+Operator-reported spec gap: a drone crossed the FOV and the system never
+locked on, because tracking only began AFTER classification confirmed a
+drone, and motion alone triggered a stationary "stare". **Behavior
+inverted (approved by Avi):** any motion in a stationary view — or a
+low-confidence drone candidate — now immediately locks the camera onto the
+object and follows it (centering + zoom-sizing corrections + autofocus)
+while classification runs *during* the follow. Classification is an
+outcome of tracking, not a precondition.
+
+**INVESTIGATING was rewritten** from stare/zoom-pulse to a follow-and-
+identify loop. Its exits:
+- drone candidate ≥ operator threshold → confirm → TRACKING + alarm
+  (unchanged handoff into the existing TRACKING branch).
+- COCO cross-check positively identifies the locked region as a non-drone
+  (car/person/…) on ≥2 consecutive results (`NON_DRONE_ID_*`) → abandon,
+  log `object_identified`, cooldown, resume scan. No alarm.
+- object leaves FOV (no evidence for `LOST_TARGET_TIMEOUT_SECONDS`=3s) →
+  resume scan, no cooldown.
+- never identified within `UNIDENTIFIED_TRACK_BUDGET_SECONDS`=30s (bounded
+  so the scan keeps covering the area) → give up, cooldown, resume.
+
+**Supporting changes:**
+- `video_stream._update_motion()` now localizes the largest moving region
+  (dilate + `findContours` + `boundingRect`) and publishes `box`/`at`
+  alongside `active`/`confidence`. Autonomy follows the motion box when the
+  classifier has nothing that tick.
+- `detection.filter_false_positive_drones()` now returns `(verified,
+  rejected)` where `rejected` is `[(box, coco_label)]`; plumbed through
+  `DetectionResult.rejected`. This is the channel that makes non-drone
+  identification observable to autonomy (it used to silently drop them).
+- Removed: the zoom-pulse investigation machinery
+  (`MAX_ZOOM_ATTEMPTS`, `MOTION_STARE_SECONDS`, `_Investigation` pulse
+  fields, `POST_ADJUST_SETTLE_SECONDS`, `investigate zoom` log lines).
+  The end-of-investigation line now reports `corrections=` not
+  `zoom_attempts=`; `summarize_telemetry.py` updated to match.
+- Frontend: INVESTIGATING label → "עוקב אחר עצם לא מזוהה…"; new
+  `object_identified` event label.
+
+**Verified live (2026-07-21):** repeated lock-ons on real moving objects —
+the camera now actively FOLLOWS (7 corrections over 10s in one episode)
+instead of the old 2.5s stationary stare, exits cleanly on "left field of
+view" with no false alarm. Suite **59/59** (was 53); confirmed stable
+across 12 consecutive runs (fixed one flaky test that leaked scenario 5's
+stale mock detection into scenario 5c). Must stay 59/59.
+
+**Still open (unchanged by this work):** close-approach confidence
+collapse — the reason lock-ons on a real drone may still not reach the
+confirm threshold is the model, not the control loop. The P0 recording +
+retraining mission (below) remains the top lever.
+
+---
+
+## 0.1. Status Update — 2026-07-14 evening (post-test, WSL2 dev machine)
 
 Written after the hardware-test day, for the instance running the
 2026-07-15 field session. Where this contradicts anything below, this wins.

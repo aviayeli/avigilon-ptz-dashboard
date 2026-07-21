@@ -1,7 +1,7 @@
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Optional
 
@@ -41,6 +41,27 @@ OTHER_BOX_COLOR = (0, 165, 255)  # BGR orange
 # than the ~1s detection cadence.
 MOTION_PIXEL_DIFF_THRESHOLD = 25
 MOTION_AREA_RATIO_THRESHOLD = 0.02
+# Localizing the motion (not just detecting it) lets autonomy lock onto and
+# follow a moving object BEFORE the classifier can identify it. The diff
+# mask is dilated to merge the fragmented silhouette of one moving object
+# into a single contour; contours smaller than this fraction of the frame
+# are noise, not a trackable object.
+MOTION_DILATE_KERNEL_SIZE = 15
+MOTION_MIN_REGION_AREA_RATIO = 0.001
+# Built lazily (not at module import time) so importing this module doesn't
+# require a working numpy -- the offline state-machine test stubs numpy
+# with a bare placeholder, since it only imports video_stream for
+# DetectionResult and never actually calls _update_motion().
+_motion_dilate_kernel: Optional[np.ndarray] = None
+
+
+def _get_motion_dilate_kernel() -> np.ndarray:
+    global _motion_dilate_kernel
+    if _motion_dilate_kernel is None:
+        _motion_dilate_kernel = np.ones(
+            (MOTION_DILATE_KERNEL_SIZE, MOTION_DILATE_KERNEL_SIZE), np.uint8
+        )
+    return _motion_dilate_kernel
 # While the PTZ camera itself is panning/tilting/zooming, every pixel in the
 # frame changes, so a plain frame-diff reads as continuous "motion" -- this
 # poisons everything built on the motion signal (scan-speed modulation,
@@ -63,6 +84,10 @@ class DetectionResult:
     frame_captured_at: float  # time.monotonic() when the frame was captured
     completed_at: float  # time.monotonic() when inference finished
     inference_seconds: float
+    # Drone candidates the COCO cross-check positively identified as
+    # something else: (box, coco_label). Autonomy uses these to recognize
+    # that the object it is locked onto is not a drone.
+    rejected: list[tuple[tuple[int, int, int, int], str]] = field(default_factory=list)
 
 
 # Module-level (not instance) state: the latest detections/motion are shared
@@ -73,7 +98,10 @@ _latest_result: Optional[DetectionResult] = None
 
 _motion_lock = threading.Lock()
 _previous_gray_frame: Optional[np.ndarray] = None
-_latest_motion = {"active": False, "confidence": 0.0}
+# "box" is the bounding box (pixel xyxy) of the largest moving region, or
+# None; "at" is the time.monotonic() of the frame it was computed from, so
+# the 20Hz autonomy loop can judge freshness (frames arrive at ~9fps).
+_latest_motion = {"active": False, "confidence": 0.0, "box": None, "at": 0.0}
 
 _fps_lock = threading.Lock()
 _fps_frame_count = 0
@@ -148,7 +176,7 @@ def _update_motion(frame: np.ndarray) -> None:
     if not get_onvif_client().is_camera_motion_settled(MOTION_SETTLE_AFTER_MOVE_SECONDS):
         _previous_gray_frame = gray
         with _motion_lock:
-            _latest_motion = {"active": False, "confidence": 0.0}
+            _latest_motion = {"active": False, "confidence": 0.0, "box": None, "at": 0.0}
         return
 
     if _previous_gray_frame is None or _previous_gray_frame.shape != gray.shape:
@@ -158,11 +186,29 @@ def _update_motion(frame: np.ndarray) -> None:
     diff = cv2.absdiff(_previous_gray_frame, gray)
     _previous_gray_frame = gray
 
-    changed_ratio = float(np.count_nonzero(diff > MOTION_PIXEL_DIFF_THRESHOLD)) / diff.size
+    mask = (diff > MOTION_PIXEL_DIFF_THRESHOLD).astype(np.uint8)
+    changed_ratio = float(np.count_nonzero(mask)) / mask.size
+    active = changed_ratio >= MOTION_AREA_RATIO_THRESHOLD
+
+    # Locate the largest moving region so autonomy can lock onto it before
+    # classification. Only done when motion is active -- findContours on a
+    # noise-speckled mask every frame would be wasted work.
+    box = None
+    if active:
+        dilated = cv2.dilate(mask, _get_motion_dilate_kernel())
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = MOTION_MIN_REGION_AREA_RATIO * mask.size
+        best = max(contours, key=cv2.contourArea, default=None)
+        if best is not None and cv2.contourArea(best) >= min_area:
+            x, y, w, h = cv2.boundingRect(best)
+            box = (x, y, x + w, y + h)
+
     with _motion_lock:
         _latest_motion = {
-            "active": changed_ratio >= MOTION_AREA_RATIO_THRESHOLD,
+            "active": active,
             "confidence": min(1.0, changed_ratio / MOTION_AREA_RATIO_THRESHOLD),
+            "box": box,
+            "at": time.monotonic(),
         }
 
 
@@ -269,6 +315,7 @@ class VideoStreamManager:
             last_seq = seq
 
             started = time.monotonic()
+            rejected: list[tuple[tuple[int, int, int, int], str]] = []
             try:
                 detections = get_drone_detector().detect(frame)
                 if is_drone_verification_enabled():
@@ -276,7 +323,7 @@ class VideoStreamManager:
                     # remembered pixel regions are only valid while the
                     # camera holds still (same signal that gates frame-diff
                     # motion above).
-                    detections = filter_false_positive_drones(
+                    detections, rejected = filter_false_positive_drones(
                         frame,
                         detections,
                         camera_settled=get_onvif_client().is_camera_motion_settled(
@@ -294,6 +341,7 @@ class VideoStreamManager:
                 frame_captured_at=captured_at,
                 completed_at=finished,
                 inference_seconds=finished - started,
+                rejected=rejected,
             )
             with _detections_lock:
                 _latest_result = result

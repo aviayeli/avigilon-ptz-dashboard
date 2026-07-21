@@ -44,12 +44,13 @@ RE_WAYPOINT_REACHED = re.compile(
     r"^\[AUTONOMY\] waypoint (\d+) reached after ([0-9.]+)s \(arrived=(True|False)\)$"
 )
 RE_INVESTIGATING = re.compile(r"^\[AUTONOMY\] investigating \((.+)\)$")
-RE_INVESTIGATE_ZOOM = re.compile(
-    r"^\[AUTONOMY\] investigate zoom (in|out) "
-    r"\(attempt (\d+)/(\d+), confidence=([0-9.]+), box_ratio=([0-9.]+)\)$"
-)
+# 2026-07-21: lock-on rewrite replaced the stationary zoom-pulse investigation
+# with a follow-and-identify loop -- there is no "investigate zoom in/out"
+# line anymore (corrections during a lock-on reuse the same "[TRACK]
+# offset_x=..." line as confirmed tracking; see the note on section 5 below).
+# "zoom_attempts=" became "corrections=" in the end-of-investigation line.
 RE_INVESTIGATION_ENDED = re.compile(
-    r"^\[AUTONOMY\] investigation ended \((.+)\) after ([0-9.]+)s, zoom_attempts=(\d+)$"
+    r"^\[AUTONOMY\] investigation ended \((.+)\) after ([0-9.]+)s, corrections=(\d+)$"
 )
 RE_LOOP_ERROR = re.compile(r"^\[AUTONOMY\] loop error, stopping camera:$")
 
@@ -161,9 +162,7 @@ class SessionStats:
         self.investigation_trigger_hist: dict[str, int] = {}
         self.investigation_end_hist: dict[str, int] = {}
         self.investigation_durations: list[float] = []
-        self.investigation_zoom_attempts_final: list[int] = []
-        self.zoom_in_count = 0
-        self.zoom_out_count = 0
+        self.investigation_corrections_final: list[int] = []
 
         self.track_gaps: list[float] = []
         self.track_corrections = 0
@@ -248,26 +247,16 @@ def parse_log(path: Path) -> SessionStats:
                     stats.parsed_count += 1
                     continue
 
-                mm = RE_INVESTIGATE_ZOOM.match(body)
-                if mm:
-                    direction = mm.group(1)
-                    if direction == "in":
-                        stats.zoom_in_count += 1
-                    else:
-                        stats.zoom_out_count += 1
-                    stats.parsed_count += 1
-                    continue
-
                 mm = RE_INVESTIGATION_ENDED.match(body)
                 if mm:
                     reason = mm.group(1)
                     duration = float(mm.group(2))
-                    zoom_attempts = int(mm.group(3))
+                    corrections = int(mm.group(3))
                     stats.investigation_end_hist[reason] = (
                         stats.investigation_end_hist.get(reason, 0) + 1
                     )
                     stats.investigation_durations.append(duration)
-                    stats.investigation_zoom_attempts_final.append(zoom_attempts)
+                    stats.investigation_corrections_final.append(corrections)
                     stats.parsed_count += 1
                     continue
 
@@ -417,13 +406,12 @@ def build_report(path: Path, stats: SessionStats) -> str:
     for l in histogram(end_hist_with_confirmed, stats.investigations_started):
         w(l)
     w(stat_line("duration", stats.investigation_durations, "s"))
-    zoom_hist: dict[int, int] = {}
-    for za in stats.investigation_zoom_attempts_final:
-        zoom_hist[za] = zoom_hist.get(za, 0) + 1
-    w("  zoom_attempts-at-end histogram:")
-    for l in histogram(zoom_hist):
+    corrections_hist: dict[int, int] = {}
+    for c in stats.investigation_corrections_final:
+        corrections_hist[c] = corrections_hist.get(c, 0) + 1
+    w("  corrections-at-end histogram (follow-and-identify lock-on):")
+    for l in histogram(corrections_hist):
         w(l)
-    w(f"  zoom in / zoom out       {stats.zoom_in_count} / {stats.zoom_out_count}")
     w("  footnote: 'confirmed' is a proxy = investigations_started - count of")
     w("  explicit 'investigation ended (...)' lines. An investigation with no")
     w("  ended line transitioned to TRACKING instead (confirmed), rather than")
@@ -433,6 +421,11 @@ def build_report(path: Path, stats: SessionStats) -> str:
     w("")
     w("5. TRACKING")
     w("-" * 78)
+    w("  NOTE: since the 2026-07-21 lock-on rewrite, corrections issued while")
+    w("  following an unconfirmed target (INVESTIGATING) use the same")
+    w("  '[TRACK] offset_x=...' log line as confirmed tracking, so the")
+    w("  correction/deadband/box_ratio stats below are a mix of both -- only")
+    w("  gap_since_previous and target-lost-count are TRACKING-exclusive.")
     w(stat_line("gap_since_previous", stats.track_gaps, "s"))
     w("  (design target ~1s measurement cadence)")
     w(f"  corrections issued      {stats.track_corrections}")

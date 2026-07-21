@@ -9,6 +9,7 @@
     search_started: 'התחלת סריקה',
     search_stopped: 'עצירת סריקה',
     drone_detected: 'זוהה רחפן',
+    object_identified: 'זוהה עצם שאינו רחפן',
     target_lost: 'המטרה אבדה',
     loop_error: 'שגיאה במערכת האוטונומית',
     video_stale: 'שידור הווידאו קפא - סריקה מושהית',

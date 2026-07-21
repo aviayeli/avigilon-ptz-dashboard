@@ -56,7 +56,7 @@
   const MODE_LABELS = {
     idle: 'במנוחה',
     searching: 'בסריקה...',
-    investigating: 'בבדיקה...',
+    investigating: 'עוקב אחר עצם לא מזוהה...',
     tracking: 'מעקב אחרי רחפן!'
   };
 

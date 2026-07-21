@@ -3,11 +3,12 @@
 Runs without any third-party dependency and without camera hardware:
 cv2/numpy/torch/ultralytics/onvif/pydantic_settings are stubbed, and the
 real autonomy loop runs against a fake ONVIF client and controllable fake
-detection results. Covers: investigation triggers (candidate + motion),
-evidence-freshness gating, the confidence-seeking zoom loop and its give-up
-path, tracking corrections and hysteresis, target loss and zoom restore,
-immediate engagement when a drone is already in view at start, and stop()
-responsiveness.
+detection results. Covers: motion-first lock-on (candidate OR located
+motion box triggers immediate follow, before any classification), the
+unconfirmed-lock-on identification budget and its give-up path, non-drone
+identification via the COCO rejection channel, tracking corrections and
+hysteresis, target loss and zoom restore, immediate engagement when a drone
+is already in view at start, and stop() responsiveness.
 
 Run:  python3 backend/tests/test_state_machine.py
 Exits nonzero on any failure. Timing-sensitive (drives the real 20Hz loop
@@ -110,6 +111,9 @@ class FakeOnvif:
     def get_ptz_status(self):
         return {"pan": 0.0, "tilt": 0.0, "moving": self.moving}
 
+    def set_autofocus(self):
+        self._rec("set_autofocus")
+
     def calls_of(self, name):
         with self.lock:
             return [c for c in self.calls if c[0] == name]
@@ -141,13 +145,14 @@ class SharedResult:
         self.result = None
         self.seq = 0
 
-    def publish(self, detections):
+    def publish(self, detections, rejected=None):
         with self.lock:
             self.seq += 1
             now = time.monotonic()
             self.result = DetectionResult(
                 detections=detections, frame_seq=self.seq,
                 frame_captured_at=now, completed_at=now, inference_seconds=0.1,
+                rejected=rejected or [],
             )
 
     def get(self):
@@ -158,7 +163,7 @@ class SharedResult:
 fake_onvif = FakeOnvif()
 fake_video = FakeVideo()
 shared = SharedResult()
-motion = {"active": False, "confidence": 0.0}
+motion = {"active": False, "confidence": 0.0, "box": None, "at": 0.0}
 verification = {"enabled": True}
 events = []
 
@@ -185,6 +190,24 @@ def check(name, cond):
 def wait_for(pred, timeout, what):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.02)
+    print(f"  (timeout waiting for: {what})", flush=True)
+    return False
+
+
+def wait_while_doing(pred, action, timeout, what):
+    # Like wait_for, but calls action() on every poll instead of sleeping --
+    # for scenarios that need continuous fresh evidence published in lockstep
+    # with the check. A separate publisher thread would work too, but its
+    # sleep-wake cadence can be starved for multiple seconds under GIL
+    # contention on a loaded 2-core host (observed live), racing unfairly
+    # against the production 3s target-loss timeout; polling from this same
+    # loop removes that cross-thread race entirely.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        action()
         if pred():
             return True
         time.sleep(0.02)
@@ -231,38 +254,70 @@ check("alarm off after loss", not ctl.status()["alarm_active"])
 check("verification re-enabled after loss", verification["enabled"] is True)
 check("target_lost event logged", "target_lost" in events)
 
-# --- scenario 5: low-confidence small candidate -> zoom-in pulse, then give up ---
+# --- scenario 5: a low-confidence candidate locks on immediately (motion-
+# first: no classification precondition), is followed with corrections, and
+# -- never clearing the confirm bar -- gives up once its bounded
+# identification budget expires (never follows an unidentifiable object
+# forever). Budget shrunk for test speed. ---
 fake_onvif.clear()
-small_low = drone(0.2, (620, 350, 660, 390))  # tiny box, conf 0.2 (>=0.15 trigger, < 0.5 threshold)
+autonomy.UNIDENTIFIED_TRACK_BUDGET_SECONDS = 1.0
+small_low = drone(0.2, (900, 320, 940, 360))  # off-center, conf 0.2 (>=0.15 trigger, < 0.5 threshold)
 shared.publish([small_low])
-check("low-conf candidate triggers INVESTIGATING",
+check("low-conf candidate locks on immediately (INVESTIGATING)",
       wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "investigating(low)"))
+check("autofocus requested on lock-on (image-quality optimization)",
+      bool(fake_onvif.calls_of("set_autofocus")))
+check("lock-on issues a following correction (not a stationary stare)",
+      wait_for(lambda: fake_onvif.calls_of("continuous_move"), 2, "lock-on correction"))
 publisher_stop = threading.Event()
 
 def keep_publishing():
     while not publisher_stop.is_set():
         shared.publish([small_low])
-        time.sleep(0.3)
+        time.sleep(0.1)
 
 t = threading.Thread(target=keep_publishing, daemon=True)
 t.start()
-check("zoom-in pulse issued during investigation",
-      wait_for(lambda: any(c[3] > 0 for c in fake_onvif.calls_of("continuous_move")), 5, "zoom pulse"))
-check("investigation gives up after attempt budget -> SEARCHING",
-      wait_for(lambda: ctl.mode == Mode.SEARCHING, 15, "give up"))
-zoom_out_after = any(c[3] < 0 for c in fake_onvif.calls_of("continuous_move"))
-check("zoom restore (zoom-out) issued after failed investigation", zoom_out_after)
+check("unconfirmed lock-on gives up after its identification budget -> SEARCHING",
+      wait_for(lambda: ctl.mode == Mode.SEARCHING, 5, "budget exhausted"))
+autonomy.UNIDENTIFIED_TRACK_BUDGET_SECONDS = 30.0  # restore for later scenarios
 
-# --- scenario 5b: failed-investigation cooldown -- the still-visible
-# unconfirmable candidate must NOT re-trigger investigation, and waypoint
-# coverage must resume (the publisher keeps the candidate in view) ---
+# --- scenario 5b: post-abandon cooldown -- the still-visible unconfirmed
+# candidate must NOT immediately re-lock, and waypoint coverage must resume
+# (the publisher keeps the candidate in view) ---
 fake_onvif.clear()
-reinvestigated = wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "re-investigation (should NOT happen)")
-check("failed-investigation cooldown suppresses immediate re-trigger", not reinvestigated)
+relocked = wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "re-lock-on (should NOT happen)")
+check("post-abandon cooldown suppresses immediate re-lock", not relocked)
 check("scan resumes waypoint coverage during cooldown",
       bool(fake_onvif.calls_of("absolute_move")))
 publisher_stop.set()
 t.join()
+
+# --- scenario 5c: a locked-on object the COCO cross-check positively
+# identifies as something else (e.g. a car) is abandoned -- no alarm, no
+# TRACKING -- and the cooldown/resume path fires exactly as a budget
+# timeout would. Confirm-grade candidates still override the cooldown from
+# 5b, so wait it out first. ---
+shared.publish([])  # clear scenario 5's stale candidate before it can leak
+                    # through once the cooldown below lapses
+time.sleep(autonomy.INVESTIGATE_FAIL_COOLDOWN_SECONDS)
+fake_onvif.clear()
+events.clear()
+car_box = (300, 200, 340, 240)
+low_drone_over_car = drone(0.2, car_box)
+shared.publish([low_drone_over_car])
+check("candidate over a to-be-identified region locks on",
+      wait_for(lambda: ctl.mode == Mode.INVESTIGATING, 3, "investigating(car)"))
+
+check("consecutive non-drone identifications abandon the lock-on",
+      wait_while_doing(
+          lambda: ctl.mode == Mode.SEARCHING,
+          lambda: shared.publish([], rejected=[(car_box, "car")]),
+          3, "identified as car",
+      ))
+check("object_identified event logged with the COCO label", "object_identified" in events)
+check("no alarm raised for a positively-identified non-drone",
+      not ctl.status()["alarm_active"])
 
 # --- scenario 6: stop() is responsive and resets state ---
 started_stop = time.monotonic()
@@ -281,26 +336,39 @@ check("alarm active on immediate engage", ctl2.status()["alarm_active"])
 check("immediate engage logged", "drone_detected" in events)
 ctl2.stop()
 
-# --- scenario 8: motion-only trigger -> INVESTIGATING, then stare times out ---
+# --- scenario 8: a located motion box alone -- no classified drone
+# candidate at all -- locks on and is actively followed; once the object
+# stops being seen, the lock-on ends via ordinary target loss (no cooldown,
+# since it was never identified as anything, drone or otherwise). ---
 shared.publish([])
 fake_onvif.clear()
 ctl3 = autonomy.AutonomyController()
 ctl3.start(-0.5, 0.5, -0.2, 0.2)
+motion["box"] = (900, 300, 960, 360)  # off-center, so a correction is expected
+motion["at"] = time.monotonic()
 motion["active"] = True
-check("motion triggers INVESTIGATING",
-      wait_for(lambda: ctl3.mode == Mode.INVESTIGATING, 3, "motion investigate"))
-motion["active"] = False
+check("located motion triggers lock-on with no classified candidate",
+      wait_for(lambda: ctl3.mode == Mode.INVESTIGATING, 3, "motion lock-on"))
+check("lock-on actively follows the motion box (not a stationary stare)",
+      wait_for(lambda: fake_onvif.calls_of("continuous_move"), 2, "motion-follow correction"))
 
-def publish_empty():
-    while ctl3.mode == Mode.INVESTIGATING:
-        shared.publish([])
-        time.sleep(0.3)
+motion_stop = threading.Event()
 
-t3 = threading.Thread(target=publish_empty, daemon=True)
+def keep_motion_fresh():
+    while not motion_stop.is_set():
+        motion["at"] = time.monotonic()
+        time.sleep(0.1)
+
+t3 = threading.Thread(target=keep_motion_fresh, daemon=True)
 t3.start()
-check("motion stare times out back to SEARCHING",
-      wait_for(lambda: ctl3.mode == Mode.SEARCHING, autonomy.MOTION_STARE_SECONDS + 3, "stare timeout"))
-t3.join(timeout=1)
+time.sleep(0.5)
+check("still locked on while motion keeps being seen", ctl3.mode == Mode.INVESTIGATING)
+motion_stop.set()
+t3.join()
+motion["box"] = None
+motion["active"] = False
+check("lock-on ends via target loss once motion stops (no candidate ever)",
+      wait_for(lambda: ctl3.mode == Mode.SEARCHING, autonomy.LOST_TARGET_TIMEOUT_SECONDS + 3, "motion lost"))
 ctl3.stop()
 
 # --- scenario 9: one transient PTZ SOAP failure is retried, scan survives ---

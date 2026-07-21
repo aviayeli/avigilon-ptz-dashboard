@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Optional
 
 from app.alarm import start_alarm, stop_alarm
-from app.detection import Detection
+from app.detection import Detection, box_iou
 from app.events import get_event_log
 from app.onvif_client import get_onvif_client
 from app.video_stream import (
@@ -43,31 +43,38 @@ HEAT_REVISIT_THRESHOLD = 3.0
 SCAN_SPEED_SLOW = 0.2
 SCAN_SPEED_FAST = 0.6
 
-# Investigation: stop, stare, and adjust zoom until the detector's confidence
-# clears the operator threshold or the attempt budget runs out. Zoom pulses
-# are non-blocking (deadline-based) so the loop stays responsive to stop().
-SMALL_BOX_AREA_RATIO = 0.05  # below this, zoom IN for more pixels
-LARGE_BOX_AREA_RATIO = 0.35  # above this, zoom OUT for context
-ZOOM_PULSE_SECONDS = 0.5
-ZOOM_PULSE_SPEED = 0.5
-MAX_ZOOM_ATTEMPTS = 4  # total pulses, either direction, per investigation
+# Lock-on identification (INVESTIGATING): any motion within a stationary
+# view -- or a low-confidence drone candidate -- immediately locks the
+# camera onto the object: keep it centered and sized (same correction
+# mechanics as confirmed tracking) with autofocus enabled, while the
+# classifier works on the continuously-optimized image. Classification is
+# an outcome of tracking, not a precondition (operator-specified
+# 2026-07-15: the old stationary "stare" let fast targets cross the frame
+# and leave before the ~1Hz classifier could ever confirm them).
+ZOOM_PULSE_SPEED = 0.5  # speed of the zoom-restore move on lock-on/track exit
 # Ignore drone candidates below this confidence as scan triggers -- without a
 # floor, 1%-confidence noise constantly interrupts waypoint coverage.
 INVESTIGATE_MIN_CONFIDENCE = 0.15
-# After an investigation exhausts its zoom budget without confirming, the
-# unconfirmable candidate is usually still in view -- without a cooldown the
-# scan re-investigates it back-to-back forever and the raster never advances
-# (observed live: minutes frozen on one false positive). Candidate triggers
-# are suppressed for this long; motion triggers stay live so a genuinely
-# arriving drone still interrupts the scan immediately.
+# After an abandoned lock-on (identified as non-drone, or identification
+# budget exhausted), the same object is usually still in view and still
+# moving -- without a cooldown it would be re-locked back-to-back forever
+# and the raster would never advance. During the cooldown, motion and
+# low-confidence candidates are ignored; a confirm-grade candidate (>= the
+# operator threshold) still engages immediately.
 INVESTIGATE_FAIL_COOLDOWN_SECONDS = 8.0
-# Evidence freshness: only detection results computed from frames captured
-# this long AFTER the camera finished its last adjustment count -- earlier
-# results may describe the pre-adjustment view (inference runs at ~1Hz while
-# this loop ticks at 20Hz).
-POST_ADJUST_SETTLE_SECONDS = 0.2
-INVESTIGATION_RESULT_TIMEOUT_SECONDS = 2.5  # ~2 inference cycles + margin
-MOTION_STARE_SECONDS = 2.5  # how long a motion-only trigger holds the stare
+# A never-identified object is not followed forever -- the scan must keep
+# covering the rest of the area (bounded budget agreed with the operator).
+UNIDENTIFIED_TRACK_BUDGET_SECONDS = 30.0
+# Motion boxes are only ever published from settled, stationary views
+# (video_stream suppresses motion while the camera moves); consume one only
+# while it is fresh -- frames arrive at ~9fps, the loop ticks at 20Hz.
+MOTION_BOX_FRESH_SECONDS = 1.0
+# Non-drone identification: the COCO cross-check must contradict the locked
+# region on this many consecutive detection results (flicker guard), each
+# with at least this much box overlap, before the object is declared
+# not-a-drone and abandoned.
+NON_DRONE_ID_IOU = 0.4
+NON_DRONE_ID_CONSECUTIVE = 2
 # Pause at each waypoint so the settle-gated frame diff and the ~1Hz detector
 # get a stationary look at the sector -- still frames also detect far better
 # than motion-blurred mid-pan ones.
@@ -124,19 +131,20 @@ class Mode(str, Enum):
 
 
 @dataclass
-class _Investigation:
-    # State for one investigation episode. wait_started_at is the evidence
-    # freshness floor: only detection results computed from frames captured
-    # after the camera finished its last adjustment count (see
-    # POST_ADJUST_SETTLE_SECONDS). zoom_balance_seconds is the signed net
-    # zoom time applied, so it can be undone on the way back to the scan.
-    motion_triggered: bool
+class _LockOn:
+    # State for one unconfirmed lock-on episode (INVESTIGATING): the camera
+    # is following target_box while the classifier tries to identify it.
+    # last_evidence_at is when the target was last seen by ANY evidence
+    # source (drone candidate, motion box, or a contradicting COCO
+    # identification -- the object being identified as a car still proves
+    # it's there). rejected_hits counts consecutive detection results whose
+    # COCO cross-check contradicted the locked region.
     started_at: float
-    wait_started_at: float
-    zoom_attempts: int = 0
-    zoom_balance_seconds: float = 0.0
-    pulse_ends_at: Optional[float] = None
-    pulse_direction: float = 0.0
+    last_evidence_at: float
+    target_box: tuple[int, int, int, int]
+    corrections: int = 0
+    rejected_hits: int = 0
+    rejected_label: str = ""
 
 
 def _box_area(box: tuple[int, int, int, int]) -> int:
@@ -213,23 +221,24 @@ def _build_raster_waypoints(
 
 
 def _compute_track_velocities(
-    detection: Detection, frame_shape: Optional[tuple[int, int]]
+    box: tuple[int, int, int, int], frame_shape: Optional[tuple[int, int]]
 ) -> tuple[float, float, float]:
     # Proportional control with a deadband: velocity scales with how far the
     # box center is from the frame center, zero inside the deadband so the
-    # camera doesn't hunt around a well-centered target.
+    # camera doesn't hunt around a well-centered target. Works on any box --
+    # a classified drone detection or an unclassified motion region.
     if frame_shape is None:
         return 0.0, 0.0, 0.0
 
     frame_h, frame_w = frame_shape
-    x1, y1, x2, y2 = detection.box
+    x1, y1, x2, y2 = box
     frame_cx, frame_cy = frame_w / 2, frame_h / 2
 
     offset_x = ((x1 + x2) / 2 - frame_cx) / frame_cx if frame_cx else 0
     offset_y = ((y1 + y2) / 2 - frame_cy) / frame_cy if frame_cy else 0
 
     frame_area = frame_w * frame_h
-    box_ratio = _box_area(detection.box) / frame_area if frame_area else 0
+    box_ratio = _box_area(box) / frame_area if frame_area else 0
 
     pan = 0.0 if abs(offset_x) < TRACK_DEADBAND_RATIO else _clamp(
         offset_x, -TRACK_MAX_VELOCITY, TRACK_MAX_VELOCITY
@@ -432,12 +441,13 @@ class AutonomyController:
         last_status_poll_at = 0.0
         dwell_until = 0.0
 
-        investigation: Optional[_Investigation] = None
+        lockon: Optional[_LockOn] = None
         zoom_restore_ends_at: Optional[float] = None
-        candidate_suppressed_until = 0.0
+        suppressed_until = 0.0
 
         last_detection_at = time.monotonic()
         last_consumed_seq = -1
+        last_consumed_motion_at = 0.0
         correction_ends_at: Optional[float] = None
         correction_started_at = 0.0
         correction_zoom_direction = 0.0
@@ -445,7 +455,8 @@ class AutonomyController:
 
         def book_correction_zoom(ended_at: float) -> None:
             # Approximate signed seconds-at-pulse-speed bookkeeping so the
-            # net zoom applied while tracking can be undone on target loss.
+            # net zoom applied while following a target can be undone when
+            # the episode ends.
             nonlocal track_zoom_balance
             if correction_zoom_direction != 0.0:
                 track_zoom_balance += (
@@ -453,6 +464,81 @@ class AutonomyController:
                     * (ended_at - correction_started_at)
                     * (TRACK_ZOOM_SPEED / ZOOM_PULSE_SPEED)
                 )
+
+        def issue_correction(
+            box: tuple[int, int, int, int],
+            frame_shape: Optional[tuple[int, int]],
+            now: float,
+        ) -> None:
+            # One time-boxed move-settle-measure correction toward centering
+            # and sizing the box -- shared by unconfirmed lock-ons
+            # (INVESTIGATING) and confirmed tracking (TRACKING). Called only
+            # when fresh target evidence arrives; expire_correction() below
+            # handles the per-tick timeout regardless of new evidence.
+            nonlocal correction_ends_at, correction_started_at, correction_zoom_direction
+            pan, tilt, zoom = _compute_track_velocities(box, frame_shape)
+            if pan == 0.0 and tilt == 0.0 and zoom == 0.0:
+                if correction_ends_at is not None:
+                    _ptz_with_retry("deadband stop", onvif.stop)
+                    book_correction_zoom(now)
+                    correction_ends_at = None
+                    correction_zoom_direction = 0.0
+            else:
+                if correction_ends_at is not None:
+                    # Replacing a correction still in flight: book its zoom
+                    # time first.
+                    book_correction_zoom(now)
+                _ptz_with_retry(
+                    "tracking correction", onvif.continuous_move, pan, tilt, zoom
+                )
+                correction_started_at = now
+                correction_zoom_direction = (
+                    0.0 if zoom == 0.0 else (1.0 if zoom > 0 else -1.0)
+                )
+                # Time-box the correction instead of letting a command
+                # computed from an up-to-1s-old box run until the next
+                # result arrives: move a little, stop, re-measure. This also
+                # keeps motion blur down for the next inference.
+                correction_ends_at = now + TRACK_CORRECTION_MAX_SECONDS
+
+        def expire_correction(now: float) -> None:
+            # Per-tick timeout check, independent of new evidence -- stops a
+            # correction that has run its time-box even if nothing fresh has
+            # arrived to replace it yet.
+            nonlocal correction_ends_at, correction_zoom_direction
+            if correction_ends_at is not None and now >= correction_ends_at:
+                _ptz_with_retry("correction stop", onvif.stop)
+                book_correction_zoom(now)
+                correction_ends_at = None
+                correction_zoom_direction = 0.0
+
+        def end_lockon(reason: str, now: float, cooldown: bool, event_type: str) -> None:
+            # Unconfirmed lock-on over (identified as non-drone, budget
+            # exhausted, or the object left the view): stop, undo net zoom,
+            # optionally cool down re-triggers, resume the raster.
+            nonlocal lockon, suppressed_until, zoom_restore_ends_at
+            nonlocal correction_ends_at, correction_zoom_direction
+            nonlocal track_zoom_balance, move_issued
+            print(
+                f"[AUTONOMY] investigation ended ({reason}) "
+                f"after {now - lockon.started_at:.1f}s, "
+                f"corrections={lockon.corrections}",
+                flush=True,
+            )
+            _ptz_with_retry("lock-on end stop", onvif.stop)
+            if correction_ends_at is not None:
+                book_correction_zoom(now)
+                correction_ends_at = None
+                correction_zoom_direction = 0.0
+            if cooldown:
+                suppressed_until = now + INVESTIGATE_FAIL_COOLDOWN_SECONDS
+            get_event_log().add(event_type, reason)
+            zoom_restore_ends_at = self._begin_zoom_restore(onvif, track_zoom_balance, now)
+            track_zoom_balance = 0.0
+            lockon = None
+            move_issued = False
+            self._set_last_detection(None)
+            self._set_mode(Mode.SEARCHING)
 
         video_stale = False
 
@@ -513,29 +599,59 @@ class AutonomyController:
                             _ptz_with_retry("zoom restore stop", onvif.stop)
                             zoom_restore_ends_at = None
                     else:
+                        # During the post-abandon cooldown only a
+                        # confirm-grade candidate may re-engage; otherwise
+                        # any low-confidence candidate or located motion
+                        # locks on immediately -- identification happens
+                        # WHILE following, not before.
+                        suppressed = now < suppressed_until
                         candidate = (
-                            _largest_drone_detection(result.detections, INVESTIGATE_MIN_CONFIDENCE)
-                            if result is not None and now >= candidate_suppressed_until
+                            _largest_drone_detection(
+                                result.detections,
+                                get_confidence_threshold()
+                                if suppressed
+                                else INVESTIGATE_MIN_CONFIDENCE,
+                            )
+                            if result is not None
                             else None
                         )
                         # Motion is suppressed while the camera itself moves
                         # (video_stream gates on OnvifClient motion state), so
-                        # an active reading means something moved within a
-                        # stationary view -- a real investigation trigger,
-                        # not scan-induced pixel churn.
-                        motion_active = get_motion_status().get("active", False)
+                        # a located motion box means something moved within a
+                        # stationary view -- a real lock-on trigger, not
+                        # scan-induced pixel churn.
+                        motion = get_motion_status()
+                        motion_box = (
+                            motion.get("box")
+                            if not suppressed
+                            and now - motion.get("at", 0.0) <= MOTION_BOX_FRESH_SECONDS
+                            else None
+                        )
+                        trigger_box = candidate.box if candidate is not None else motion_box
 
-                        if candidate is not None or motion_active:
+                        if trigger_box is not None:
                             waypoint_heat[waypoint_index] = min(
                                 HEAT_MAX, waypoint_heat[waypoint_index] + HEAT_INCREMENT
                             )
-                            _ptz_with_retry("investigation stop", onvif.stop)
+                            _ptz_with_retry("lock-on stop", onvif.stop)
                             move_issued = False
                             self._set_last_detection(candidate)
-                            investigation = _Investigation(
-                                motion_triggered=candidate is None,
+                            if candidate is not None and result is not None:
+                                last_consumed_seq = result.frame_seq
+                            if motion_box is not None:
+                                last_consumed_motion_at = motion.get("at", 0.0)
+                            # Image-quality optimization for identification:
+                            # let the lens focus itself while we follow.
+                            # Best-effort -- a focus failure must not kill
+                            # the control loop.
+                            try:
+                                onvif.set_autofocus()
+                            except Exception as exc:
+                                print(f"[AUTONOMY] autofocus request failed: {exc}", flush=True)
+                            lockon = _LockOn(
                                 started_at=now,
-                                wait_started_at=now,
+                                last_evidence_at=now,
+                                target_box=trigger_box,
                             )
                             trigger = (
                                 "motion"
@@ -544,6 +660,7 @@ class AutonomyController:
                             )
                             print(f"[AUTONOMY] investigating ({trigger})", flush=True)
                             self._set_mode(Mode.INVESTIGATING)
+                            issue_correction(trigger_box, frame_shape, now)
                         elif not move_issued:
                             if now >= dwell_until:
                                 pan, tilt = waypoints[waypoint_index]
@@ -596,122 +713,98 @@ class AutonomyController:
                                 # motion-blurred one.
                                 dwell_until = now + WAYPOINT_DWELL_SECONDS
 
-                elif mode == Mode.INVESTIGATING and investigation is not None:
-                    inv = investigation
-                    if inv.pulse_ends_at is not None:
-                        # A zoom pulse is in flight; end it on schedule. No
-                        # blocking sleep, so stop() takes effect within a tick.
-                        if now >= inv.pulse_ends_at:
-                            _ptz_with_retry("zoom pulse stop", onvif.stop)
-                            inv.zoom_balance_seconds += inv.pulse_direction * ZOOM_PULSE_SECONDS
-                            inv.pulse_ends_at = None
-                            inv.wait_started_at = now
-                    else:
-                        # Evidence must postdate the camera's last adjustment
-                        # plus a settle margin -- an older result may describe
-                        # the pre-adjustment view.
-                        fresh = (
-                            result is not None
-                            and result.frame_captured_at
-                            >= inv.wait_started_at + POST_ADJUST_SETTLE_SECONDS
-                        )
-                        end_investigation = False
-                        end_reason = ""
-                        if not fresh:
-                            if now - inv.wait_started_at >= INVESTIGATION_RESULT_TIMEOUT_SECONDS:
-                                # Detector produced nothing usable in time.
-                                end_investigation = True
-                                end_reason = "no fresh detection result"
-                        else:
-                            top = _largest_drone_detection(result.detections)
+                elif mode == Mode.INVESTIGATING and lockon is not None:
+                    # Following an unconfirmed target: identification is an
+                    # outcome of tracking, not a precondition. Each fresh
+                    # detection result is checked, in order, for (1) a
+                    # confirming drone candidate, (2) a positive non-drone
+                    # identification of the locked region, else (3) treated
+                    # as inconclusive; a fresh motion box is separately used
+                    # to keep following when the classifier has nothing this
+                    # tick (a moving object need not be drone-shaped to keep
+                    # a visual lock on it).
+                    fresh_box: Optional[tuple[int, int, int, int]] = None
+                    confirmed = False
+                    if result is not None and result.frame_seq != last_consumed_seq:
+                        last_consumed_seq = result.frame_seq
+                        top = _largest_drone_detection(result.detections, INVESTIGATE_MIN_CONFIDENCE)
+                        if top is not None:
                             self._set_last_detection(top)
-                            if top is not None and top.confidence >= get_confidence_threshold():
+                            lockon.last_evidence_at = now
+                            lockon.rejected_hits = 0
+                            fresh_box = top.box
+                            if top.confidence >= get_confidence_threshold():
                                 # Confirmed. (The COCO false-positive filter
                                 # already vetted this result upstream.)
+                                confirmed = True
                                 self._set_alarm(True)
                                 last_detection_at = now
-                                last_consumed_seq = result.frame_seq
-                                track_zoom_balance = inv.zoom_balance_seconds
-                                correction_ends_at = None
-                                correction_zoom_direction = 0.0
-                                # Only fetch the actual full frame here (not
-                                # every tick): this is the one spot that needs
-                                # pixel data, for the saved snapshot.
+                                track_zoom_balance = 0.0
                                 get_event_log().add(
                                     "drone_detected",
                                     f"confidence {top.confidence:.0%}",
+                                    # Only fetch the actual full frame here
+                                    # (not every tick): this is the one spot
+                                    # that needs pixel data, for the snapshot.
                                     frame=video.get_latest_frame_annotated(),
                                 )
                                 # Skip COCO verification while a confirmed
                                 # target is being tracked.
                                 set_drone_verification_enabled(False)
-                                investigation = None
+                                lockon = None
                                 self._set_mode(Mode.TRACKING)
-                            elif top is None:
-                                # A motion-triggered stare waits out its
-                                # window (the ~1Hz detector may need another
-                                # pass at the now-stationary scene); a
-                                # vanished candidate ends immediately.
-                                if not (
-                                    inv.motion_triggered
-                                    and now - inv.started_at < MOTION_STARE_SECONDS
-                                ):
-                                    end_investigation = True
-                                    end_reason = (
-                                        "stare window expired"
-                                        if inv.motion_triggered
-                                        else "candidate vanished"
+                        else:
+                            hit_label = next(
+                                (
+                                    label
+                                    for box, label in result.rejected
+                                    if box_iou(box, lockon.target_box) >= NON_DRONE_ID_IOU
+                                ),
+                                None,
+                            )
+                            if hit_label is not None:
+                                lockon.rejected_hits += 1
+                                lockon.rejected_label = hit_label
+                                lockon.last_evidence_at = now
+                                if lockon.rejected_hits >= NON_DRONE_ID_CONSECUTIVE:
+                                    end_lockon(
+                                        f"identified as {hit_label}", now,
+                                        cooldown=True, event_type="object_identified",
                                     )
-                            elif inv.zoom_attempts >= MAX_ZOOM_ATTEMPTS:
-                                # Budget exhausted without clearing the
-                                # confidence bar: not identifiable as a drone.
-                                end_investigation = True
-                                end_reason = "attempt budget exhausted"
                             else:
-                                # Below the bar: adjust zoom in the direction
-                                # most likely to help -- in for more pixels on
-                                # a small/mid target, out for context when the
-                                # box already fills the view.
-                                frame_area = (
-                                    frame_shape[0] * frame_shape[1]
-                                    if frame_shape is not None
-                                    else 0
-                                )
-                                box_ratio = _box_area(top.box) / frame_area if frame_area else 0.0
-                                direction = -1.0 if box_ratio > LARGE_BOX_AREA_RATIO else 1.0
-                                inv.zoom_attempts += 1
-                                print(
-                                    f"[AUTONOMY] investigate zoom "
-                                    f"{'out' if direction < 0 else 'in'} "
-                                    f"(attempt {inv.zoom_attempts}/{MAX_ZOOM_ATTEMPTS}, "
-                                    f"confidence={top.confidence:.2f}, box_ratio={box_ratio:.3f})",
-                                    flush=True,
-                                )
-                                _ptz_with_retry(
-                                    "zoom pulse",
-                                    onvif.continuous_move, 0, 0, direction * ZOOM_PULSE_SPEED,
-                                )
-                                inv.pulse_direction = direction
-                                inv.pulse_ends_at = now + ZOOM_PULSE_SECONDS
+                                lockon.rejected_hits = 0
 
-                        if end_investigation:
-                            print(
-                                f"[AUTONOMY] investigation ended ({end_reason}) "
-                                f"after {now - inv.started_at:.1f}s, "
-                                f"zoom_attempts={inv.zoom_attempts}",
-                                flush=True,
+                    if not confirmed and lockon is not None:
+                        motion = get_motion_status()
+                        motion_at = motion.get("at", 0.0)
+                        motion_box = motion.get("box")
+                        if (
+                            motion_box is not None
+                            and motion_at > last_consumed_motion_at
+                            and now - motion_at <= MOTION_BOX_FRESH_SECONDS
+                        ):
+                            last_consumed_motion_at = motion_at
+                            lockon.last_evidence_at = now
+                            if fresh_box is None:
+                                fresh_box = motion_box
+
+                        if fresh_box is not None:
+                            lockon.target_box = fresh_box
+                            lockon.corrections += 1
+                            issue_correction(fresh_box, frame_shape, now)
+
+                        expire_correction(now)
+
+                        if now - lockon.last_evidence_at >= LOST_TARGET_TIMEOUT_SECONDS:
+                            end_lockon(
+                                "left field of view", now,
+                                cooldown=False, event_type="target_lost",
                             )
-                            if end_reason == "attempt budget exhausted":
-                                candidate_suppressed_until = (
-                                    now + INVESTIGATE_FAIL_COOLDOWN_SECONDS
-                                )
-                            zoom_restore_ends_at = self._begin_zoom_restore(
-                                onvif, inv.zoom_balance_seconds, now
+                        elif now - lockon.started_at >= UNIDENTIFIED_TRACK_BUDGET_SECONDS:
+                            end_lockon(
+                                "identification budget exhausted", now,
+                                cooldown=True, event_type="target_lost",
                             )
-                            investigation = None
-                            move_issued = False
-                            self._set_last_detection(None)
-                            self._set_mode(Mode.SEARCHING)
 
                 elif mode == Mode.TRACKING:
                     if result is not None and result.frame_seq != last_consumed_seq:
@@ -733,37 +826,9 @@ class AutonomyController:
                                 f"gap_since_previous={gap:.2f}s",
                                 flush=True,
                             )
-                            pan, tilt, zoom = _compute_track_velocities(top, frame_shape)
-                            if pan == 0.0 and tilt == 0.0 and zoom == 0.0:
-                                if correction_ends_at is not None:
-                                    _ptz_with_retry("deadband stop", onvif.stop)
-                                    book_correction_zoom(now)
-                                    correction_ends_at = None
-                                    correction_zoom_direction = 0.0
-                            else:
-                                if correction_ends_at is not None:
-                                    # Replacing a correction still in flight:
-                                    # book its zoom time first.
-                                    book_correction_zoom(now)
-                                _ptz_with_retry(
-                                    "tracking correction", onvif.continuous_move, pan, tilt, zoom
-                                )
-                                correction_started_at = now
-                                correction_zoom_direction = (
-                                    0.0 if zoom == 0.0 else (1.0 if zoom > 0 else -1.0)
-                                )
-                                # Time-box the correction instead of letting a
-                                # command computed from an up-to-1s-old box run
-                                # until the next result arrives: move a
-                                # little, stop, re-measure. This also keeps
-                                # motion blur down for the next inference.
-                                correction_ends_at = now + TRACK_CORRECTION_MAX_SECONDS
+                            issue_correction(top.box, frame_shape, now)
 
-                    if correction_ends_at is not None and now >= correction_ends_at:
-                        _ptz_with_retry("correction stop", onvif.stop)
-                        book_correction_zoom(now)
-                        correction_ends_at = None
-                        correction_zoom_direction = 0.0
+                    expire_correction(now)
 
                     if now - last_detection_at >= LOST_TARGET_TIMEOUT_SECONDS:
                         print(
